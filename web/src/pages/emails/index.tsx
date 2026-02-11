@@ -573,6 +573,55 @@ const EmailsPage: React.FC = () => {
         },
     ], [handleDelete, handleEdit, handleViewMails]);
 
+    const rowSelection = useMemo(
+        () => ({
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+        }),
+        [selectedRowKeys]
+    );
+
+    const tablePagination = useMemo(
+        () => ({
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showTotal: (count: number) => `共 ${count} 条`,
+            onChange: (currentPage: number, currentPageSize: number) => {
+                setPage(currentPage);
+                setPageSize(currentPageSize);
+            },
+        }),
+        [page, pageSize, total]
+    );
+
+    const emailDetailSrcDoc = useMemo(
+        () => `
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <style>
+                                body { 
+                                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                                    font-size: 14px;
+                                    line-height: 1.6;
+                                    color: #333;
+                                    margin: 0;
+                                    padding: 16px;
+                                    background: #fafafa;
+                                }
+                                img { max-width: 100%; height: auto; }
+                                a { color: #1890ff; }
+                            </style>
+                        </head>
+                        <body>${emailDetailContent}</body>
+                        </html>
+                    `,
+        [emailDetailContent]
+    );
+
     // ========================================
     // Group table columns
     // ========================================
@@ -632,6 +681,8 @@ const EmailsPage: React.FC = () => {
             <Title level={4} style={{ margin: '0 0 16px' }}>邮箱管理</Title>
             <Tabs
                 defaultActiveKey="emails"
+                animated={false}
+                destroyInactiveTabPane
                 items={[
                     {
                         key: 'emails',
@@ -697,21 +748,8 @@ const EmailsPage: React.FC = () => {
                                     dataSource={data}
                                     rowKey="id"
                                     loading={loading}
-                                    rowSelection={{
-                                        selectedRowKeys,
-                                        onChange: setSelectedRowKeys,
-                                    }}
-                                    pagination={{
-                                        current: page,
-                                        pageSize,
-                                        total,
-                                        showSizeChanger: true,
-                                        showTotal: (total: number) => `共 ${total} 条`,
-                                        onChange: (p: number, ps: number) => {
-                                            setPage(p);
-                                            setPageSize(ps);
-                                        },
-                                    }}
+                                    rowSelection={rowSelection}
+                                    pagination={tablePagination}
                                 />
                             </>
                         ),
@@ -950,28 +988,7 @@ const EmailsPage: React.FC = () => {
                     <iframe
                     title="email-content"
                     sandbox="allow-same-origin"
-                    srcDoc={`
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <meta charset="utf-8">
-                            <style>
-                                body { 
-                                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                                    font-size: 14px;
-                                    line-height: 1.6;
-                                    color: #333;
-                                    margin: 0;
-                                    padding: 16px;
-                                    background: #fafafa;
-                                }
-                                img { max-width: 100%; height: auto; }
-                                a { color: #1890ff; }
-                            </style>
-                        </head>
-                        <body>${emailDetailContent}</body>
-                        </html>
-                    `}
+                    srcDoc={emailDetailSrcDoc}
                     style={{
                         width: '100%',
                         height: 'calc(100vh - 300px)',

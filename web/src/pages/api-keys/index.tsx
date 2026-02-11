@@ -428,6 +428,22 @@ const ApiKeysPage: React.FC = () => {
         },
     ], [handleDelete, handleEdit, handleManageEmails, handleViewPool]);
 
+    const tablePagination = useMemo(
+        () => ({
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (count: number) => `共 ${count} 条`,
+            onChange: (currentPage: number, currentPageSize: number) => {
+                setPage(currentPage);
+                setPageSize(currentPageSize);
+            },
+        }),
+        [page, pageSize, total]
+    );
+
     return (
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -449,18 +465,7 @@ const ApiKeysPage: React.FC = () => {
                 dataSource={data}
                 rowKey="id"
                 loading={loading}
-                pagination={{
-                    current: page,
-                    pageSize,
-                    total,
-                    showSizeChanger: true,
-                    showQuickJumper: true,
-                    showTotal: (total) => `共 ${total} 条`,
-                    onChange: (p, ps) => {
-                        setPage(p);
-                        setPageSize(ps);
-                    },
-                }}
+                pagination={tablePagination}
             />
 
             {/* 创建/编辑弹窗 */}
