@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider, App as AntApp } from 'antd';
+import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { useAuthStore } from './stores/authStore';
 import { isSuperAdmin } from './utils/auth';
@@ -8,15 +8,21 @@ import { isSuperAdmin } from './utils/auth';
 // Layouts
 import MainLayout from './layouts/MainLayout';
 
-// Pages
-import LoginPage from './pages/login';
-import DashboardPage from './pages/dashboard';
-import EmailsPage from './pages/emails';
-import ApiKeysPage from './pages/api-keys';
-import ApiDocsPage from './pages/api-docs';
-import OperationLogsPage from './pages/operation-logs';
-import AdminsPage from './pages/admins';
-import SettingsPage from './pages/settings';
+// Pages (lazy loaded)
+const LoginPage = lazy(() => import('./pages/login'));
+const DashboardPage = lazy(() => import('./pages/dashboard'));
+const EmailsPage = lazy(() => import('./pages/emails'));
+const ApiKeysPage = lazy(() => import('./pages/api-keys'));
+const ApiDocsPage = lazy(() => import('./pages/api-docs'));
+const OperationLogsPage = lazy(() => import('./pages/operation-logs'));
+const AdminsPage = lazy(() => import('./pages/admins'));
+const SettingsPage = lazy(() => import('./pages/settings'));
+
+const PageFallback: React.FC = () => (
+  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 240 }}>
+    <Spin />
+  </div>
+);
 
 // 路由守卫组件
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -45,6 +51,12 @@ const SuperAdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
 };
 
 const App: React.FC = () => {
+  const withSuspense = (element: React.ReactElement) => (
+    <Suspense fallback={<PageFallback />}>
+      {element}
+    </Suspense>
+  );
+
   return (
     <ConfigProvider
       locale={zhCN}
@@ -60,7 +72,7 @@ const App: React.FC = () => {
         <BrowserRouter>
           <Routes>
             {/* 登录页 */}
-            <Route path="/login" element={<LoginPage />} />
+            <Route path="/login" element={withSuspense(<LoginPage />)} />
 
             {/* 需要认证的页面 */}
             <Route
@@ -72,20 +84,20 @@ const App: React.FC = () => {
               }
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<DashboardPage />} />
-              <Route path="emails" element={<EmailsPage />} />
-              <Route path="api-keys" element={<ApiKeysPage />} />
-              <Route path="api-docs" element={<ApiDocsPage />} />
-              <Route path="operation-logs" element={<OperationLogsPage />} />
+              <Route path="dashboard" element={withSuspense(<DashboardPage />)} />
+              <Route path="emails" element={withSuspense(<EmailsPage />)} />
+              <Route path="api-keys" element={withSuspense(<ApiKeysPage />)} />
+              <Route path="api-docs" element={withSuspense(<ApiDocsPage />)} />
+              <Route path="operation-logs" element={withSuspense(<OperationLogsPage />)} />
               <Route
                 path="admins"
                 element={
                   <SuperAdminRoute>
-                    <AdminsPage />
+                    {withSuspense(<AdminsPage />)}
                   </SuperAdminRoute>
                 }
               />
-              <Route path="settings" element={<SettingsPage />} />
+              <Route path="settings" element={withSuspense(<SettingsPage />)} />
             </Route>
 
             {/* 404 重定向 */}
