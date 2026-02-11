@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Table,
     Button,
@@ -15,6 +15,7 @@ import {
     Tooltip,
     List,
     Tabs,
+    Spin,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -88,6 +89,7 @@ const EmailsPage: React.FC = () => {
     const [mailModalVisible, setMailModalVisible] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [keyword, setKeyword] = useState('');
+    const [debouncedKeyword, setDebouncedKeyword] = useState('');
     const [filterGroupId, setFilterGroupId] = useState<number | undefined>(undefined);
     const [importContent, setImportContent] = useState('');
     const [separator, setSeparator] = useState('----');
@@ -100,6 +102,8 @@ const EmailsPage: React.FC = () => {
     const [emailDetailVisible, setEmailDetailVisible] = useState(false);
     const [emailDetailContent, setEmailDetailContent] = useState<string>('');
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
+    const [emailEditLoading, setEmailEditLoading] = useState(false);
+    const [renderEmailDetailFrame, setRenderEmailDetailFrame] = useState(false);
     const [form] = Form.useForm();
 
     // Group-related state
@@ -131,7 +135,7 @@ const EmailsPage: React.FC = () => {
 
     const fetchData = useCallback(async () => {
         setLoading(true);
-        const params: { page: number; pageSize: number; keyword: string; groupId?: number } = { page, pageSize, keyword };
+        const params: { page: number; pageSize: number; keyword: string; groupId?: number } = { page, pageSize, keyword: debouncedKeyword };
         if (filterGroupId !== undefined) params.groupId = filterGroupId;
 
         const result = await requestData<EmailListResult>(
@@ -143,7 +147,7 @@ const EmailsPage: React.FC = () => {
             setTotal(result.total);
         }
         setLoading(false);
-    }, [filterGroupId, keyword, page, pageSize]);
+    }, [debouncedKeyword, filterGroupId, page, pageSize]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -154,6 +158,13 @@ const EmailsPage: React.FC = () => {
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
+            setDebouncedKeyword(keyword.trim());
+        }, 300);
+        return () => window.clearTimeout(timer);
+    }, [keyword]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
             void fetchData();
         }, 0);
         return () => window.clearTimeout(timer);
@@ -161,12 +172,16 @@ const EmailsPage: React.FC = () => {
 
     const handleCreate = () => {
         setEditingId(null);
+        setEmailEditLoading(false);
         form.resetFields();
         setModalVisible(true);
     };
 
-    const handleEdit = async (record: EmailAccount) => {
+    const handleEdit = useCallback(async (record: EmailAccount) => {
         setEditingId(record.id);
+        setEmailEditLoading(true);
+        form.resetFields();
+        setModalVisible(true);
         try {
             const res = await emailApi.getById<EmailDetailsResult>(record.id, true);
             if (res.code === 200) {
@@ -178,14 +193,15 @@ const EmailsPage: React.FC = () => {
                     status: details.status,
                     groupId: details.groupId,
                 });
-                setModalVisible(true);
             }
         } catch {
             message.error('获取详情失败');
+        } finally {
+            setEmailEditLoading(false);
         }
-    };
+    }, [form]);
 
-    const handleDelete = async (id: number) => {
+    const handleDelete = useCallback(async (id: number) => {
         try {
             const res = await emailApi.delete(id);
             if (res.code === 200) {
@@ -198,7 +214,7 @@ const EmailsPage: React.FC = () => {
         } catch (err: unknown) {
             message.error(getErrorMessage(err, '删除失败'));
         }
-    };
+    }, [fetchData, fetchGroups]);
 
     const handleBatchDelete = async () => {
         if (selectedRowKeys.length === 0) {
@@ -313,7 +329,7 @@ const EmailsPage: React.FC = () => {
         }
     };
 
-    const loadMails = async (emailId: number, mailbox: string, showSuccessToast: boolean = false) => {
+    const loadMails = useCallback(async (emailId: number, mailbox: string, showSuccessToast: boolean = false) => {
         setMailLoading(true);
         const result = await requestData<{ messages: MailItem[] }>(
             () => emailApi.viewMails(emailId, mailbox),
@@ -326,15 +342,15 @@ const EmailsPage: React.FC = () => {
             }
         }
         setMailLoading(false);
-    };
+    }, []);
 
-    const handleViewMails = async (record: EmailAccount, mailbox: string) => {
+    const handleViewMails = useCallback(async (record: EmailAccount, mailbox: string) => {
         setCurrentEmail(record.email);
         setCurrentEmailId(record.id);
         setCurrentMailbox(mailbox);
         setMailModalVisible(true);
         await loadMails(record.id, mailbox);
-    };
+    }, [loadMails]);
 
     const handleRefreshMails = async () => {
         if (!currentEmailId) return;
@@ -371,13 +387,13 @@ const EmailsPage: React.FC = () => {
         setGroupModalVisible(true);
     };
 
-    const handleEditGroup = (group: EmailGroup) => {
+    const handleEditGroup = useCallback((group: EmailGroup) => {
         setEditingGroupId(group.id);
         groupForm.setFieldsValue({ name: group.name, description: group.description });
         setGroupModalVisible(true);
-    };
+    }, [groupForm]);
 
-    const handleDeleteGroup = async (id: number) => {
+    const handleDeleteGroup = useCallback(async (id: number) => {
         try {
             const res = await groupApi.delete(id);
             if (res.code === 200) {
@@ -388,7 +404,7 @@ const EmailsPage: React.FC = () => {
         } catch (err: unknown) {
             message.error(getErrorMessage(err, '删除失败'));
         }
-    };
+    }, [fetchData, fetchGroups]);
 
     const handleGroupSubmit = async () => {
         try {
@@ -463,7 +479,7 @@ const EmailsPage: React.FC = () => {
     // ========================================
     // Email table columns
     // ========================================
-    const columns: ColumnsType<EmailAccount> = [
+    const columns: ColumnsType<EmailAccount> = useMemo(() => [
         {
             title: '邮箱',
             dataIndex: 'email',
@@ -555,12 +571,12 @@ const EmailsPage: React.FC = () => {
                 </Space>
             ),
         },
-    ];
+    ], [handleDelete, handleEdit, handleViewMails]);
 
     // ========================================
     // Group table columns
     // ========================================
-    const groupColumns: ColumnsType<EmailGroup> = [
+    const groupColumns: ColumnsType<EmailGroup> = useMemo(() => [
         {
             title: '分组名称',
             dataIndex: 'name',
@@ -606,7 +622,7 @@ const EmailsPage: React.FC = () => {
                 </Space>
             ),
         },
-    ];
+    ], [handleDeleteGroup, handleEditGroup]);
 
     // ========================================
     // Render
@@ -728,9 +744,11 @@ const EmailsPage: React.FC = () => {
                 open={modalVisible}
                 onOk={handleSubmit}
                 onCancel={() => setModalVisible(false)}
+                destroyOnClose
                 width={600}
             >
-                <Form form={form} layout="vertical">
+                <Spin spinning={emailEditLoading}>
+                    <Form form={form} layout="vertical">
                     <Form.Item name="email" label="邮箱地址" rules={[{ required: true, message: '请输入邮箱地址' }, { type: 'email', message: '请输入有效的邮箱地址' }]}>
                         <Input placeholder="example@outlook.com" />
                     </Form.Item>
@@ -767,7 +785,8 @@ const EmailsPage: React.FC = () => {
                             <Select.Option value="DISABLED">禁用</Select.Option>
                         </Select>
                     </Form.Item>
-                </Form>
+                    </Form>
+                </Spin>
             </Modal>
 
             {/* 批量导入 Modal */}
@@ -776,6 +795,7 @@ const EmailsPage: React.FC = () => {
                 open={importModalVisible}
                 onOk={handleImport}
                 onCancel={() => setImportModalVisible(false)}
+                destroyOnClose
                 width={700}
             >
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
@@ -852,6 +872,7 @@ const EmailsPage: React.FC = () => {
                 open={mailModalVisible}
                 onCancel={() => setMailModalVisible(false)}
                 footer={null}
+                destroyOnClose
                 width={1000}
                 styles={{ body: { padding: '16px 24px' } }}
             >
@@ -920,10 +941,13 @@ const EmailsPage: React.FC = () => {
                 open={emailDetailVisible}
                 onCancel={() => setEmailDetailVisible(false)}
                 footer={null}
+                destroyOnClose
+                afterOpenChange={(open: boolean) => setRenderEmailDetailFrame(open)}
                 width={900}
                 styles={{ body: { padding: '16px 24px' } }}
             >
-                <iframe
+                {renderEmailDetailFrame ? (
+                    <iframe
                     title="email-content"
                     sandbox="allow-same-origin"
                     srcDoc={`
@@ -955,7 +979,12 @@ const EmailsPage: React.FC = () => {
                         borderRadius: '8px',
                         backgroundColor: '#fafafa',
                     }}
-                />
+                    />
+                ) : (
+                    <div style={{ height: 'calc(100vh - 300px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Spin />
+                    </div>
+                )}
             </Modal>
 
             {/* 创建/编辑分组 Modal */}
@@ -964,6 +993,7 @@ const EmailsPage: React.FC = () => {
                 open={groupModalVisible}
                 onOk={handleGroupSubmit}
                 onCancel={() => setGroupModalVisible(false)}
+                destroyOnClose
                 width={400}
             >
                 <Form form={groupForm} layout="vertical">
@@ -982,6 +1012,7 @@ const EmailsPage: React.FC = () => {
                 open={assignGroupModalVisible}
                 onOk={handleBatchAssignGroup}
                 onCancel={() => setAssignGroupModalVisible(false)}
+                destroyOnClose
                 width={400}
             >
                 <p>已选择 {selectedRowKeys.length} 个邮箱</p>

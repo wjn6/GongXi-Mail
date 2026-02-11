@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Table,
     Button,
@@ -103,7 +103,10 @@ const ApiKeysPage: React.FC = () => {
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
     const [form] = Form.useForm();
 
-    const extractUsedEmailIds = (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id);
+    const extractUsedEmailIds = useCallback(
+        (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id),
+        []
+    );
 
     const fetchGroups = useCallback(async () => {
         const result = await requestData<EmailGroup[]>(
@@ -143,7 +146,7 @@ const ApiKeysPage: React.FC = () => {
         setModalVisible(true);
     };
 
-    const handleEdit = (record: ApiKey) => {
+    const handleEdit = useCallback((record: ApiKey) => {
         setEditingId(record.id);
         form.setFieldsValue({
             name: record.name,
@@ -152,9 +155,9 @@ const ApiKeysPage: React.FC = () => {
             expiresAt: record.expiresAt ? dayjs(record.expiresAt) : null,
         });
         setModalVisible(true);
-    };
+    }, [form]);
 
-    const handleDelete = async (id: number) => {
+    const handleDelete = useCallback(async (id: number) => {
         try {
             const res = await apiKeyApi.delete(id);
             if (res.code === 200) {
@@ -166,7 +169,7 @@ const ApiKeysPage: React.FC = () => {
         } catch (err: unknown) {
             message.error(getErrorMessage(err, '删除失败'));
         }
-    };
+    }, [fetchData]);
 
     const handleSubmit = async () => {
         try {
@@ -205,7 +208,7 @@ const ApiKeysPage: React.FC = () => {
         }
     };
 
-    const handleViewPool = async (record: ApiKey) => {
+    const handleViewPool = useCallback(async (record: ApiKey) => {
         setCurrentApiKey(record);
         setPoolGroupName(undefined);
         setPoolModalVisible(true);
@@ -220,7 +223,7 @@ const ApiKeysPage: React.FC = () => {
         } finally {
             setPoolLoading(false);
         }
-    };
+    }, []);
 
     const handlePoolGroupChange = async (groupName: string | undefined) => {
         setPoolGroupName(groupName);
@@ -258,7 +261,7 @@ const ApiKeysPage: React.FC = () => {
     };
 
     // 打开邮箱管理弹窗
-    const handleManageEmails = async (record: ApiKey) => {
+    const handleManageEmails = useCallback(async (record: ApiKey) => {
         setCurrentApiKey(record);
         setEmailGroupId(undefined);
         setEmailModalVisible(true);
@@ -275,9 +278,9 @@ const ApiKeysPage: React.FC = () => {
         } finally {
             setEmailLoading(false);
         }
-    };
+    }, [extractUsedEmailIds]);
 
-    const handleEmailGroupChange = async (groupId: number | undefined) => {
+    const handleEmailGroupChange = useCallback(async (groupId: number | undefined) => {
         setEmailGroupId(groupId);
         if (!currentApiKey) return;
         setEmailLoading(true);
@@ -293,7 +296,7 @@ const ApiKeysPage: React.FC = () => {
         } finally {
             setEmailLoading(false);
         }
-    };
+    }, [currentApiKey, extractUsedEmailIds]);
 
     // 保存邮箱选择
     const handleSaveEmails = async () => {
@@ -319,7 +322,7 @@ const ApiKeysPage: React.FC = () => {
         }
     };
 
-    const columns: ColumnsType<ApiKey> = [
+    const columns: ColumnsType<ApiKey> = useMemo(() => [
         {
             title: '名称',
             dataIndex: 'name',
@@ -423,7 +426,7 @@ const ApiKeysPage: React.FC = () => {
                 </Space>
             ),
         },
-    ];
+    ], [handleDelete, handleEdit, handleManageEmails, handleViewPool]);
 
     return (
         <div>
@@ -466,6 +469,7 @@ const ApiKeysPage: React.FC = () => {
                 open={modalVisible}
                 onOk={handleSubmit}
                 onCancel={() => setModalVisible(false)}
+                destroyOnClose
                 width={500}
             >
                 <Form form={form} layout="vertical">
@@ -513,6 +517,7 @@ const ApiKeysPage: React.FC = () => {
                 open={newKeyModalVisible}
                 onOk={() => setNewKeyModalVisible(false)}
                 onCancel={() => setNewKeyModalVisible(false)}
+                destroyOnClose
                 footer={[
                     <Button key="close" onClick={() => setNewKeyModalVisible(false)}>
                         关闭
@@ -552,6 +557,7 @@ const ApiKeysPage: React.FC = () => {
                 open={poolModalVisible}
                 onCancel={() => setPoolModalVisible(false)}
                 footer={null}
+                destroyOnClose
                 width={500}
             >
                 {poolLoading ? (
@@ -661,6 +667,7 @@ const ApiKeysPage: React.FC = () => {
                 okText="保存"
                 cancelText="取消"
                 confirmLoading={savingEmails}
+                destroyOnClose
                 width={600}
             >
                 {emailLoading ? (
