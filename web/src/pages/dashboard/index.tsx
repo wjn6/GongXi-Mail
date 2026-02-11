@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Row, Col, Card, Table, Tag, Space, Typography, Spin, Progress } from 'antd';
+import { Row, Col, Card, Table, Tag, Typography, Spin } from 'antd';
 import {
     MailOutlined,
     KeyOutlined,
     CheckCircleOutlined,
-    WarningOutlined,
-    ThunderboltOutlined,
     ApiOutlined,
 } from '@ant-design/icons';
 import { Line, Pie } from '@ant-design/charts';
@@ -29,12 +27,31 @@ interface Stats {
     };
 }
 
+interface DashboardEmailItem {
+    id: number;
+    email: string;
+    status: 'ACTIVE' | 'ERROR' | 'DISABLED';
+    createdAt: string;
+}
+
+interface DashboardApiKeyItem {
+    id: number;
+    name: string;
+    usageCount: number;
+    status: 'ACTIVE' | 'DISABLED';
+}
+
+interface ApiTrendItem {
+    date: string;
+    count: number;
+}
+
 const DashboardPage: React.FC = () => {
     const [loading, setLoading] = useState(true);
     const [stats, setStats] = useState<Stats | null>(null);
-    const [recentEmails, setRecentEmails] = useState<any[]>([]);
-    const [recentApiKeys, setRecentApiKeys] = useState<any[]>([]);
-    const [apiTrend, setApiTrend] = useState<any[]>([]);
+    const [recentEmails, setRecentEmails] = useState<DashboardEmailItem[]>([]);
+    const [recentApiKeys, setRecentApiKeys] = useState<DashboardApiKeyItem[]>([]);
+    const [apiTrend, setApiTrend] = useState<ApiTrendItem[]>([]);
 
     useEffect(() => {
         fetchData();
@@ -42,11 +59,11 @@ const DashboardPage: React.FC = () => {
 
     const fetchData = async () => {
         try {
-            const [statsRes, emailsRes, apiKeysRes, trendRes]: any[] = await Promise.all([
-                dashboardApi.getStats(),
-                emailApi.getList({ page: 1, pageSize: 5 }),
-                apiKeyApi.getList({ page: 1, pageSize: 5 }),
-                dashboardApi.getApiTrend(7),
+            const [statsRes, emailsRes, apiKeysRes, trendRes] = await Promise.all([
+                dashboardApi.getStats<Stats>(),
+                emailApi.getList<DashboardEmailItem>({ page: 1, pageSize: 5 }),
+                apiKeyApi.getList<DashboardApiKeyItem>({ page: 1, pageSize: 5 }),
+                dashboardApi.getApiTrend<ApiTrendItem>(7),
             ]);
 
             if (statsRes.code === 200) {
@@ -177,10 +194,6 @@ const DashboardPage: React.FC = () => {
             </div>
         );
     }
-
-    const totalEmails = stats?.emails.total || 0;
-    const activeEmails = stats?.emails.active || 0;
-    const emailHealthRate = totalEmails > 0 ? Math.round((activeEmails / totalEmails) * 100) : 0;
 
     return (
         <div>

@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { dashboardService } from './dashboard.service.js';
 import { z } from 'zod';
 

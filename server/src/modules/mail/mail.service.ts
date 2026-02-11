@@ -7,7 +7,7 @@ import { proxyFetch } from '../../lib/proxy.js';
 import prisma from '../../lib/prisma.js';
 import type { MailRequestInput } from './mail.schema.js';
 import Imap from 'node-imap';
-import { simpleParser } from 'mailparser';
+import { simpleParser, type ParsedMail, type Source } from 'mailparser';
 
 interface Credentials {
     id: number;
@@ -24,6 +24,39 @@ interface EmailMessage {
     text: string;
     html: string;
     date: string;
+}
+
+interface OAuthTokenResponse {
+    access_token?: string;
+    expires_in?: number;
+    scope?: string;
+}
+
+interface GraphMessage {
+    id?: string;
+    from?: {
+        emailAddress?: {
+            address?: string;
+        };
+    };
+    subject?: string;
+    bodyPreview?: string;
+    body?: {
+        content?: string;
+    };
+    createdDateTime?: string;
+}
+
+interface GraphMessagesResponse {
+    value?: GraphMessage[];
+}
+
+function getErrorMessage(error: unknown): string {
+    if (!error || typeof error !== 'object') {
+        return 'Unknown error';
+    }
+    const message = (error as { message?: unknown }).message;
+    return typeof message === 'string' && message.trim() ? message : 'Unknown error';
 }
 
 export const mailService = {
@@ -147,20 +180,27 @@ export const mailService = {
                 return null;
             }
 
-            const data: any = await response.json();
+            const data = await response.json() as OAuthTokenResponse;
 
             // 检查是否有邮件读取权限
-            const hasMailRead = data.scope && data.scope.includes('https://graph.microsoft.com/Mail.Read');
+            const scopeText = typeof data.scope === 'string' ? data.scope : '';
+            const hasMailRead = scopeText.includes('https://graph.microsoft.com/Mail.Read');
+            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
+
+            if (!accessToken) {
+                logger.warn({ email: credentials.email }, 'Graph API token missing access_token');
+                return null;
+            }
 
             if (hasMailRead) {
                 // 只有有 Mail.Read 权限时才缓存
-                const expireTime = (data.expires_in || 3600) - 60;
-                await setCache(cacheKey, data.access_token, expireTime);
+                const expireTime = ((typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60);
+                await setCache(cacheKey, accessToken, expireTime);
             } else {
                 logger.warn({ email: credentials.email }, 'No Mail.Read scope in token, will fallback to IMAP');
             }
 
-            return { accessToken: data.access_token, hasMailRead };
+            return { accessToken, hasMailRead };
         } catch (err) {
             logger.error({ err, email: credentials.email }, 'Failed to get Graph API token');
             return null;
@@ -202,11 +242,11 @@ export const mailService = {
                 throw new Error(`Graph API error: ${response.status} - ${errorText}`);
             }
 
-            const data: any = await response.json();
-            const emails = data.value || [];
+            const data = await response.json() as GraphMessagesResponse;
+            const emails = Array.isArray(data.value) ? data.value : [];
 
-            return emails.map((item: any) => ({
-                id: item.id,
+            return emails.map((item: GraphMessage, index: number) => ({
+                id: item.id || `graph_${Date.now()}_${index}`,
                 from: item.from?.emailAddress?.address || '',
                 subject: item.subject || '',
                 text: item.bodyPreview || '',
@@ -258,12 +298,17 @@ export const mailService = {
                 return null;
             }
 
-            const data: any = await response.json();
+            const data = await response.json() as OAuthTokenResponse;
+            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
+            if (!accessToken) {
+                logger.warn({ email: credentials.email }, 'IMAP token missing access_token');
+                return null;
+            }
 
-            const expireTime = (data.expires_in || 3600) - 60;
-            await setCache(cacheKey, data.access_token, expireTime);
+            const expireTime = ((typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60);
+            await setCache(cacheKey, accessToken, expireTime);
 
-            return data.access_token;
+            return accessToken;
         } catch (err) {
             logger.error({ err, email: credentials.email }, 'Failed to get IMAP token');
             return null;
@@ -288,16 +333,18 @@ export const mailService = {
         limit: number = 100
     ): Promise<EmailMessage[]> {
         return new Promise((resolve, reject) => {
-            const imap = new Imap({
+            const imapConfig: ConstructorParameters<typeof Imap>[0] = {
                 user: email,
+                password: '',
                 xoauth2: authString,
                 host: 'outlook.office365.com',
                 port: 993,
                 tls: true,
                 tlsOptions: {
-                    rejectUnauthorized: false
-                }
-            } as any);
+                    rejectUnauthorized: false,
+                },
+            };
+            const imap = new Imap(imapConfig);
 
             const emailList: EmailMessage[] = [];
             let messageCount = 0;
@@ -329,16 +376,17 @@ export const mailService = {
 
                         const f = imap.fetch(limitedResults, { bodies: '' });
 
-                        f.on('message', (msg: any) => {
-                            msg.on('body', (stream: any) => {
-                                simpleParser(stream as any)
-                                    .then((mail: any) => {
+                        f.on('message', (msg) => {
+                            msg.on('body', (stream) => {
+                                simpleParser(stream as unknown as Source)
+                                    .then((mail: ParsedMail) => {
+                                        const html = typeof mail.html === 'string' ? mail.html : '';
                                         emailList.push({
                                             id: `imap_${Date.now()}_${processedCount}`,
                                             from: mail.from?.text || '',
                                             subject: mail.subject || '',
                                             text: mail.text || '',
-                                            html: mail.html || '',
+                                            html,
                                             date: mail.date?.toISOString() || '',
                                         });
                                     })
@@ -494,7 +542,7 @@ export const mailService = {
                 for (let i = 0; i < messages.length; i += batchSize) {
                     const chunk = messages.slice(i, i + batchSize);
                     await Promise.all(chunk.map(msg =>
-                        this.deleteMessageViaGraphApi(tokenResult.accessToken, (msg as any).id, proxyConfig)
+                        this.deleteMessageViaGraphApi(tokenResult.accessToken, msg.id, proxyConfig)
                     ));
                     deletedCount += chunk.length;
                 }
@@ -510,12 +558,12 @@ export const mailService = {
                 deletedCount,
             };
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             logger.error({ err, email: credentials.email }, 'Error processing mailbox');
             return {
                 email: credentials.email,
                 mailbox: options.mailbox,
-                message: `Partial success or error: ${err.message}`,
+                message: `Partial success or error: ${getErrorMessage(err)}`,
                 status: 'error',
                 deletedCount,
             };
@@ -541,7 +589,7 @@ export const mailService = {
                 },
                 proxyConfig
             );
-        } catch (err) {
+        } catch (_err) {
             // 忽略删除错误，继续下一个
             logger.warn({ messageId }, 'Failed to delete message');
         }

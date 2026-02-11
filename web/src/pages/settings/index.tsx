@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, message, Typography, Divider, Space } from 'antd';
+import { Card, Form, Input, Button, message, Typography, Space } from 'antd';
 import { LockOutlined } from '@ant-design/icons';
 import { authApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
+import { getAdminRoleLabel } from '../../utils/auth';
+import { requestData } from '../../utils/request';
 
 const { Title, Text } = Typography;
 
@@ -22,19 +24,15 @@ const SettingsPage: React.FC = () => {
         }
 
         setLoading(true);
-        try {
-            const res: any = await authApi.changePassword(values.oldPassword, values.newPassword);
-            if (res.code === 200) {
-                message.success('密码修改成功');
-                form.resetFields();
-            } else {
-                message.error(res.message);
-            }
-        } catch (err: any) {
-            message.error(err.message || '密码修改失败');
-        } finally {
-            setLoading(false);
+        const result = await requestData<{ message?: string }>(
+            () => authApi.changePassword(values.oldPassword, values.newPassword),
+            '密码修改失败'
+        );
+        if (result) {
+            message.success('密码修改成功');
+            form.resetFields();
         }
+        setLoading(false);
     };
 
     return (
@@ -51,7 +49,7 @@ const SettingsPage: React.FC = () => {
                         <div>
                             <Text type="secondary">角色</Text>
                             <div style={{ fontSize: 16 }}>
-                                {admin?.role === 'super_admin' ? '超级管理员' : '管理员'}
+                                {getAdminRoleLabel(admin?.role)}
                             </div>
                         </div>
                     </div>

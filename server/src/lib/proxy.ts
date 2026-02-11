@@ -10,6 +10,11 @@ interface ProxyOptions {
     type?: 'socks5' | 'http' | 'none';
 }
 
+type ProxyFetchOptions = Omit<RequestInit, 'dispatcher'> & {
+    agent?: unknown;
+    dispatcher?: unknown;
+};
+
 /**
  * 创建 SOCKS5 代理 Agent
  */
@@ -103,7 +108,7 @@ export async function proxyFetch(
 ): Promise<Response> {
     const proxy = autoProxy(proxyConfig?.socks5, proxyConfig?.http);
 
-    const fetchOptions: any = { ...options };
+    const fetchOptions: ProxyFetchOptions = { ...options };
 
     if (proxy.agent) {
         fetchOptions.agent = proxy.agent;
@@ -112,7 +117,7 @@ export async function proxyFetch(
         fetchOptions.dispatcher = proxy.dispatcher;
     }
 
-    return proxy.fetch(url, fetchOptions) as Promise<Response>;
+    return proxy.fetch(url, fetchOptions as RequestInit) as Promise<Response>;
 }
 
 export default { createSocksAgent, createHttpAgent, autoProxy, proxyFetch };

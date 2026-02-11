@@ -1,4 +1,40 @@
 import axios from 'axios';
+import type {
+    AxiosError,
+    AxiosRequestConfig,
+    AxiosResponse,
+    InternalAxiosRequestConfig,
+} from 'axios';
+
+export interface ApiResponse<T = unknown> {
+    code: number;
+    data: T;
+    message: string;
+}
+
+interface ApiSuccessEnvelope<T = unknown> {
+    success: boolean;
+    data?: T;
+    error?: {
+        code?: string | number;
+        message?: string;
+    };
+}
+
+interface ApiErrorPayload {
+    message?: string;
+    error?: {
+        code?: string | number;
+        message?: string;
+    };
+}
+
+interface ApiPagedList<T> {
+    list: T[];
+    total: number;
+}
+
+type ApiResult<T = unknown> = Promise<ApiResponse<T>>;
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
@@ -10,43 +46,60 @@ const api = axios.create({
     },
 });
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null;
+
+const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
+    if (isObject(payload) && typeof payload.success === 'boolean') {
+        const envelope = payload as unknown as ApiSuccessEnvelope<T>;
+        if (envelope.success) {
+            return {
+                code: 200,
+                data: envelope.data as T,
+                message: 'Success',
+            };
+        }
+        throw {
+            code: envelope.error?.code || 'ERROR',
+            message: envelope.error?.message || 'Request failed',
+        };
+    }
+
+    if (isObject(payload) && typeof payload.code === 'number') {
+        return {
+            code: payload.code,
+            data: (payload as { data?: T }).data as T,
+            message: typeof payload.message === 'string' ? payload.message : 'Success',
+        };
+    }
+
+    return {
+        code: 200,
+        data: payload as T,
+        message: 'Success',
+    };
+};
+
 // 请求拦截器
 api.interceptors.request.use(
-    (config: any) => {
+    (config: InternalAxiosRequestConfig) => {
         const token = localStorage.getItem('token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+        if (token && config.headers) {
+            (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
         }
         return config;
     },
-    (error: any) => {
+    (error: AxiosError) => {
         return Promise.reject(error);
     }
 );
 
 // 响应拦截器 - 适配新的响应格式 { success, data, error }
 api.interceptors.response.use(
-    (response: any) => {
-        const data = response.data;
-
-        // 新格式：{ success: true, data: ... }
-        if (data && typeof data.success === 'boolean') {
-            if (data.success) {
-                // 返回兼容旧格式的对象
-                return { code: 200, data: data.data, message: 'Success' };
-            } else {
-                // 错误情况
-                return Promise.reject({
-                    code: data.error?.code || 'ERROR',
-                    message: data.error?.message || 'Request failed',
-                });
-            }
-        }
-
-        // 旧格式兼容
-        return data;
+    (response: AxiosResponse<unknown>) => {
+        return toApiResponse(response.data) as unknown as AxiosResponse<unknown>;
     },
-    (error: any) => {
+    (error: AxiosError<ApiErrorPayload>) => {
         if (error.response) {
             const { status, data } = error.response;
 
@@ -58,7 +111,7 @@ api.interceptors.response.use(
             }
 
             // 新格式错误处理
-            if (data && data.error) {
+            if (data?.error) {
                 return Promise.reject({
                     code: data.error.code || status,
                     message: data.error.message || 'Request failed',
@@ -80,22 +133,46 @@ api.interceptors.response.use(
 
 export default api;
 
+const requestGet = <T>(url: string, config?: AxiosRequestConfig): ApiResult<T> =>
+    api.get<unknown, ApiResponse<T>>(url, config);
+
+const requestPost = <TResponse, TBody = unknown>(
+    url: string,
+    data?: TBody,
+    config?: AxiosRequestConfig
+): ApiResult<TResponse> => api.post<TBody, ApiResponse<TResponse>>(url, data, config);
+
+const requestPut = <TResponse, TBody = unknown>(
+    url: string,
+    data?: TBody,
+    config?: AxiosRequestConfig
+): ApiResult<TResponse> => api.put<TBody, ApiResponse<TResponse>>(url, data, config);
+
+const requestDelete = <T>(url: string, config?: AxiosRequestConfig): ApiResult<T> =>
+    api.delete<unknown, ApiResponse<T>>(url, config);
+
 // ========================================
 // 认证 API
 // ========================================
 
 export const authApi = {
     login: (username: string, password: string) =>
-        api.post('/admin/auth/login', { username, password }),
+        requestPost<{ token: string; admin: Record<string, unknown> }, { username: string; password: string }>(
+            '/admin/auth/login',
+            { username, password }
+        ),
 
     logout: () =>
-        api.post('/admin/auth/logout'),
+        requestPost<Record<string, unknown>>('/admin/auth/logout'),
 
     getMe: () =>
-        api.get('/admin/auth/me'),
+        requestGet<Record<string, unknown>>('/admin/auth/me'),
 
     changePassword: (oldPassword: string, newPassword: string) =>
-        api.post('/admin/auth/change-password', { oldPassword, newPassword }),
+        requestPost<Record<string, unknown>, { oldPassword: string; newPassword: string }>(
+            '/admin/auth/change-password',
+            { oldPassword, newPassword }
+        ),
 };
 
 // ========================================
@@ -103,20 +180,26 @@ export const authApi = {
 // ========================================
 
 export const adminApi = {
-    getList: (params?: { page?: number; pageSize?: number; status?: string; role?: string; keyword?: string }) =>
-        api.get('/admin/admins', { params }),
+    getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; role?: string; keyword?: string }) =>
+        requestGet<ApiPagedList<T>>('/admin/admins', { params }),
 
     getById: (id: number) =>
-        api.get(`/admin/admins/${id}`),
+        requestGet<Record<string, unknown>>(`/admin/admins/${id}`),
 
     create: (data: { username: string; password: string; email?: string; role?: string; status?: string }) =>
-        api.post('/admin/admins', data),
+        requestPost<Record<string, unknown>, { username: string; password: string; email?: string; role?: string; status?: string }>(
+            '/admin/admins',
+            data
+        ),
 
     update: (id: number, data: { username?: string; password?: string; email?: string; role?: string; status?: string }) =>
-        api.put(`/admin/admins/${id}`, data),
+        requestPut<Record<string, unknown>, { username?: string; password?: string; email?: string; role?: string; status?: string }>(
+            `/admin/admins/${id}`,
+            data
+        ),
 
     delete: (id: number) =>
-        api.delete(`/admin/admins/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/admins/${id}`),
 };
 
 // ========================================
@@ -124,32 +207,44 @@ export const adminApi = {
 // ========================================
 
 export const apiKeyApi = {
-    getList: (params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) =>
-        api.get('/admin/api-keys', { params }),
+    getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) =>
+        requestGet<ApiPagedList<T>>('/admin/api-keys', { params }),
 
     getById: (id: number) =>
-        api.get(`/admin/api-keys/${id}`),
+        requestGet<Record<string, unknown>>(`/admin/api-keys/${id}`),
 
     create: (data: { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }) =>
-        api.post('/admin/api-keys', data),
+        requestPost<{ key: string }, { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }>(
+            '/admin/api-keys',
+            data
+        ),
 
     update: (id: number, data: { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }) =>
-        api.put(`/admin/api-keys/${id}`, data),
+        requestPut<Record<string, unknown>, { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }>(
+            `/admin/api-keys/${id}`,
+            data
+        ),
 
     delete: (id: number) =>
-        api.delete(`/admin/api-keys/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/api-keys/${id}`),
 
     getUsage: (id: number, groupName?: string) =>
-        api.get(`/admin/api-keys/${id}/usage`, { params: { group: groupName } }),
+        requestGet<{ total: number; used: number; remaining: number }>(`/admin/api-keys/${id}/usage`, {
+            params: { group: groupName },
+        }),
 
     resetPool: (id: number, groupName?: string) =>
-        api.post(`/admin/api-keys/${id}/reset-pool`, { group: groupName }),
+        requestPost<Record<string, unknown>, { group?: string }>(`/admin/api-keys/${id}/reset-pool`, {
+            group: groupName,
+        }),
 
-    getPoolEmails: (id: number, groupId?: number) =>
-        api.get(`/admin/api-keys/${id}/pool-emails`, { params: { groupId } }),
+    getPoolEmails: <T = Record<string, unknown>>(id: number, groupId?: number) =>
+        requestGet<T[]>(`/admin/api-keys/${id}/pool-emails`, { params: { groupId } }),
 
     updatePoolEmails: (id: number, emailIds: number[]) =>
-        api.put(`/admin/api-keys/${id}/pool-emails`, { emailIds }),
+        requestPut<{ count: number }, { emailIds: number[] }>(`/admin/api-keys/${id}/pool-emails`, {
+            emailIds,
+        }),
 };
 
 // ========================================
@@ -157,37 +252,50 @@ export const apiKeyApi = {
 // ========================================
 
 export const emailApi = {
-    getList: (params?: { page?: number; pageSize?: number; status?: string; keyword?: string; groupId?: number }) =>
-        api.get('/admin/emails', { params }),
+    getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string; groupId?: number }) =>
+        requestGet<ApiPagedList<T>>('/admin/emails', { params }),
 
-    getById: (id: number, includeSecrets?: boolean) =>
-        api.get(`/admin/emails/${id}`, { params: { secrets: includeSecrets } }),
+    getById: <T = Record<string, unknown>>(id: number, includeSecrets?: boolean) =>
+        requestGet<T>(`/admin/emails/${id}`, { params: { secrets: includeSecrets } }),
 
     create: (data: { email: string; clientId: string; refreshToken: string }) =>
-        api.post('/admin/emails', data),
+        requestPost<Record<string, unknown>, { email: string; clientId: string; refreshToken: string }>(
+            '/admin/emails',
+            data
+        ),
 
     import: (content: string, separator?: string) =>
-        api.post('/admin/emails/import', { content, separator }),
+        requestPost<Record<string, unknown>, { content: string; separator?: string }>(
+            '/admin/emails/import',
+            { content, separator }
+        ),
 
     export: (ids?: number[], separator?: string) =>
-        api.get('/admin/emails/export', { params: { ids: ids?.join(','), separator } }),
+        requestGet<{ content: string }>('/admin/emails/export', {
+            params: { ids: ids?.join(','), separator },
+        }),
 
     update: (id: number, data: { email?: string; clientId?: string; refreshToken?: string; status?: string }) =>
-        api.put(`/admin/emails/${id}`, data),
+        requestPut<Record<string, unknown>, { email?: string; clientId?: string; refreshToken?: string; status?: string }>(
+            `/admin/emails/${id}`,
+            data
+        ),
 
     delete: (id: number) =>
-        api.delete(`/admin/emails/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/emails/${id}`),
 
     batchDelete: (ids: number[]) =>
-        api.post('/admin/emails/batch-delete', { ids }),
+        requestPost<{ deleted: number }, { ids: number[] }>('/admin/emails/batch-delete', { ids }),
 
     // 查看邮件 (管理员专用)
-    viewMails: (id: number, mailbox?: string) =>
-        api.get(`/admin/emails/${id}/mails`, { params: { mailbox } }),
+    viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string) =>
+        requestGet<{ messages: T[] }>(`/admin/emails/${id}/mails`, { params: { mailbox } }),
 
     // 清空邮箱 (管理员专用)
     clearMailbox: (id: number, mailbox?: string) =>
-        api.post(`/admin/emails/${id}/clear`, { mailbox }),
+        requestPost<{ deletedCount: number }, { mailbox?: string }>(`/admin/emails/${id}/clear`, {
+            mailbox,
+        }),
 };
 
 // ========================================
@@ -195,26 +303,36 @@ export const emailApi = {
 // ========================================
 
 export const groupApi = {
-    getList: () =>
-        api.get('/admin/email-groups'),
+    getList: <T = Record<string, unknown>>() =>
+        requestGet<T[]>('/admin/email-groups'),
 
     getById: (id: number) =>
-        api.get(`/admin/email-groups/${id}`),
+        requestGet<Record<string, unknown>>(`/admin/email-groups/${id}`),
 
     create: (data: { name: string; description?: string }) =>
-        api.post('/admin/email-groups', data),
+        requestPost<Record<string, unknown>, { name: string; description?: string }>(
+            '/admin/email-groups',
+            data
+        ),
 
     update: (id: number, data: { name?: string; description?: string }) =>
-        api.put(`/admin/email-groups/${id}`, data),
+        requestPut<Record<string, unknown>, { name?: string; description?: string }>(
+            `/admin/email-groups/${id}`,
+            data
+        ),
 
     delete: (id: number) =>
-        api.delete(`/admin/email-groups/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/email-groups/${id}`),
 
     assignEmails: (groupId: number, emailIds: number[]) =>
-        api.post(`/admin/email-groups/${groupId}/assign`, { emailIds }),
+        requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/assign`, {
+            emailIds,
+        }),
 
     removeEmails: (groupId: number, emailIds: number[]) =>
-        api.post(`/admin/email-groups/${groupId}/remove`, { emailIds }),
+        requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/remove`, {
+            emailIds,
+        }),
 };
 
 // ========================================
@@ -222,14 +340,14 @@ export const groupApi = {
 // ========================================
 
 export const dashboardApi = {
-    getStats: () =>
-        api.get('/admin/dashboard/stats'),
+    getStats: <T = Record<string, unknown>>() =>
+        requestGet<T>('/admin/dashboard/stats'),
 
-    getApiTrend: (days: number = 7) =>
-        api.get('/admin/dashboard/api-trend', { params: { days } }),
+    getApiTrend: <T = Record<string, unknown>>(days: number = 7) =>
+        requestGet<T[]>('/admin/dashboard/api-trend', { params: { days } }),
 
-    getLogs: (params?: { page?: number; pageSize?: number; action?: string }) =>
-        api.get('/admin/dashboard/logs', { params }),
+    getLogs: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; action?: string }) =>
+        requestGet<ApiPagedList<T>>('/admin/dashboard/logs', { params }),
 };
 
 // ========================================
@@ -237,7 +355,7 @@ export const dashboardApi = {
 // ========================================
 
 export const logsApi = {
-    getList: (params: { page?: number; pageSize?: number; action?: string; resource?: string }) =>
-        api.get('/admin/dashboard/logs', { params }),
+    getList: <T = Record<string, unknown>>(params: { page?: number; pageSize?: number; action?: string; resource?: string }) =>
+        requestGet<ApiPagedList<T>>('/admin/dashboard/logs', { params }),
 };
 

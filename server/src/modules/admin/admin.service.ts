@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js';
 import { hashPassword } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
+import type { Prisma } from '@prisma/client';
 import type { CreateAdminInput, UpdateAdminInput, ListAdminInput } from './admin.schema.js';
 
 export const adminService = {
@@ -111,12 +112,11 @@ export const adminService = {
             throw new AppError('NOT_FOUND', 'Admin not found', 404);
         }
 
-        const updateData: any = { ...input };
+        const { password, ...rest } = input;
+        const updateData: Prisma.AdminUpdateInput = { ...rest };
 
-        // 如果更新密码，需要加密
-        if (input.password) {
-            updateData.passwordHash = await hashPassword(input.password);
-            delete updateData.password;
+        if (password) {
+            updateData.passwordHash = await hashPassword(password);
         }
 
         const updated = await prisma.admin.update({

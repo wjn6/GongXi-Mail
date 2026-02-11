@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma.js';
+import type { Prisma } from '@prisma/client';
 
 export const dashboardService = {
     /**
@@ -80,7 +81,7 @@ export const dashboardService = {
         const { page = 1, pageSize = 20, action } = options;
         const skip = (page - 1) * pageSize;
 
-        const where: any = {};
+        const where: Prisma.ApiLogWhereInput = {};
         if (action) where.action = action;
 
         const [list, total] = await Promise.all([

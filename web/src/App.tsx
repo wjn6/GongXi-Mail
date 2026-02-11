@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { useAuthStore } from './stores/authStore';
+import { isSuperAdmin } from './utils/auth';
 
 // Layouts
 import MainLayout from './layouts/MainLayout';
@@ -36,7 +37,7 @@ const SuperAdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) 
     return <Navigate to="/login" replace />;
   }
 
-  if (admin?.role !== 'super_admin') {
+  if (!isSuperAdmin(admin?.role)) {
     return <Navigate to="/dashboard" replace />;
   }
 

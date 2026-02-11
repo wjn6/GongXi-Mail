@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { adminService } from './admin.service.js';
 import { createAdminSchema, updateAdminSchema, listAdminSchema } from './admin.schema.js';
 

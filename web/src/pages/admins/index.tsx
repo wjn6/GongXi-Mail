@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     Table,
     Button,
@@ -17,6 +17,9 @@ import type { ColumnsType } from 'antd/es/table';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { adminApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
+import { getAdminRoleLabel, getAdminStatusLabel, isSuperAdmin, normalizeAdminStatus } from '../../utils/auth';
+import { getErrorMessage } from '../../utils/error';
+import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
 
 const { Title } = Typography;
@@ -25,11 +28,16 @@ interface Admin {
     id: number;
     username: string;
     email: string | null;
-    role: 'super_admin' | 'admin';
-    status: 'active' | 'disabled';
-    last_login_at: string | null;
-    last_login_ip: string | null;
-    created_at: string;
+    role: 'SUPER_ADMIN' | 'ADMIN';
+    status: 'ACTIVE' | 'DISABLED';
+    lastLoginAt: string | null;
+    lastLoginIp: string | null;
+    createdAt: string;
+}
+
+interface AdminListResult {
+    list: Admin[];
+    total: number;
 }
 
 const AdminsPage: React.FC = () => {
@@ -43,24 +51,25 @@ const AdminsPage: React.FC = () => {
     const [form] = Form.useForm();
     const { admin: currentAdmin } = useAuthStore();
 
-    useEffect(() => {
-        fetchData();
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        const result = await requestData<AdminListResult>(
+            () => adminApi.getList({ page, pageSize }),
+            '获取数据失败'
+        );
+        if (result) {
+            setData(result.list);
+            setTotal(result.total);
+        }
+        setLoading(false);
     }, [page, pageSize]);
 
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const res: any = await adminApi.getList({ page, pageSize });
-            if (res.code === 200) {
-                setData(res.data.list);
-                setTotal(res.data.total);
-            }
-        } catch (err) {
-            message.error('获取数据失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void fetchData();
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [fetchData]);
 
     const handleCreate = () => {
         setEditingId(null);
@@ -82,15 +91,15 @@ const AdminsPage: React.FC = () => {
 
     const handleDelete = async (id: number) => {
         try {
-            const res: any = await adminApi.delete(id);
+            const res = await adminApi.delete(id);
             if (res.code === 200) {
                 message.success('删除成功');
                 fetchData();
             } else {
                 message.error(res.message);
             }
-        } catch (err: any) {
-            message.error(err.message || '删除失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '删除失败'));
         }
     };
 
@@ -103,7 +112,7 @@ const AdminsPage: React.FC = () => {
                 if (!values.password) {
                     delete values.password;
                 }
-                const res: any = await adminApi.update(editingId, values);
+                const res = await adminApi.update(editingId, values);
                 if (res.code === 200) {
                     message.success('更新成功');
                     setModalVisible(false);
@@ -112,7 +121,7 @@ const AdminsPage: React.FC = () => {
                     message.error(res.message);
                 }
             } else {
-                const res: any = await adminApi.create(values);
+                const res = await adminApi.create(values);
                 if (res.code === 200) {
                     message.success('创建成功');
                     setModalVisible(false);
@@ -121,10 +130,8 @@ const AdminsPage: React.FC = () => {
                     message.error(res.message);
                 }
             }
-        } catch (err: any) {
-            if (err.message) {
-                message.error(err.message);
-            }
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '保存失败'));
         }
     };
 
@@ -145,8 +152,8 @@ const AdminsPage: React.FC = () => {
             dataIndex: 'role',
             key: 'role',
             render: (role) => (
-                <Tag color={role === 'super_admin' ? 'gold' : 'blue'}>
-                    {role === 'super_admin' ? '超级管理员' : '管理员'}
+                <Tag color={isSuperAdmin(role) ? 'gold' : 'blue'}>
+                    {getAdminRoleLabel(role)}
                 </Tag>
             ),
         },
@@ -155,18 +162,18 @@ const AdminsPage: React.FC = () => {
             dataIndex: 'status',
             key: 'status',
             render: (status) => (
-                <Tag color={status === 'active' ? 'green' : 'red'}>
-                    {status === 'active' ? '启用' : '禁用'}
+                <Tag color={normalizeAdminStatus(status) === 'ACTIVE' ? 'green' : 'red'}>
+                    {getAdminStatusLabel(status)}
                 </Tag>
             ),
         },
         {
             title: '最后登录',
-            dataIndex: 'last_login_at',
-            key: 'last_login_at',
+            dataIndex: 'lastLoginAt',
+            key: 'lastLoginAt',
             render: (val, record) =>
                 val ? (
-                    <Tooltip title={`IP: ${record.last_login_ip || '未知'}`}>
+                    <Tooltip title={`IP: ${record.lastLoginIp || '未知'}`}>
                         {dayjs(val).format('YYYY-MM-DD HH:mm')}
                     </Tooltip>
                 ) : (
@@ -175,8 +182,8 @@ const AdminsPage: React.FC = () => {
         },
         {
             title: '创建时间',
-            dataIndex: 'created_at',
-            key: 'created_at',
+            dataIndex: 'createdAt',
+            key: 'createdAt',
             render: (val) => dayjs(val).format('YYYY-MM-DD HH:mm'),
         },
         {
@@ -272,16 +279,16 @@ const AdminsPage: React.FC = () => {
                     <Form.Item name="email" label="邮箱">
                         <Input placeholder="可选" type="email" />
                     </Form.Item>
-                    <Form.Item name="role" label="角色" initialValue="admin">
+                    <Form.Item name="role" label="角色" initialValue="ADMIN">
                         <Select>
-                            <Select.Option value="admin">管理员</Select.Option>
-                            <Select.Option value="super_admin">超级管理员</Select.Option>
+                            <Select.Option value="ADMIN">管理员</Select.Option>
+                            <Select.Option value="SUPER_ADMIN">超级管理员</Select.Option>
                         </Select>
                     </Form.Item>
-                    <Form.Item name="status" label="状态" initialValue="active">
+                    <Form.Item name="status" label="状态" initialValue="ACTIVE">
                         <Select>
-                            <Select.Option value="active">启用</Select.Option>
-                            <Select.Option value="disabled">禁用</Select.Option>
+                            <Select.Option value="ACTIVE">启用</Select.Option>
+                            <Select.Option value="DISABLED">禁用</Select.Option>
                         </Select>
                     </Form.Item>
                 </Form>

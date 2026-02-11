@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Table, Tag, Space, Card, Select, Button, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { PageHeader } from '../../components';
 import { logsApi } from '../../api';
+import { LOG_ACTION_OPTIONS, getLogActionColor, getLogActionLabel } from '../../constants/logActions';
+import type { LogAction } from '../../constants/logActions';
+import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -18,41 +21,33 @@ interface LogItem {
     createdAt: string;
 }
 
-const actionLabels: Record<string, string> = {
-    'mail_new': '获取最新邮件',
-    'mail_all': '获取所有邮件',
-    'process-mailbox': '清空邮箱',
-    'pool_stats': '邮箱池统计',
-    'pool_reset': '重置邮箱池',
-    'emails': '获取邮箱列表',
-};
-
 const OperationLogsPage: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [logs, setLogs] = useState<LogItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(20);
-    const [actionFilter, setActionFilter] = useState<string | undefined>();
+    const [actionFilter, setActionFilter] = useState<LogAction | undefined>();
+
+    const fetchLogs = useCallback(async () => {
+        setLoading(true);
+        const result = await requestData<{ list: LogItem[]; total: number }>(
+            () => logsApi.getList({ page, pageSize, action: actionFilter }),
+            '获取日志失败'
+        );
+        if (result) {
+            setLogs(result.list);
+            setTotal(result.total);
+        }
+        setLoading(false);
+    }, [actionFilter, page, pageSize]);
 
     useEffect(() => {
-        fetchLogs();
-    }, [page, pageSize, actionFilter]);
-
-    const fetchLogs = async () => {
-        setLoading(true);
-        try {
-            const res: any = await logsApi.getList({ page, pageSize, action: actionFilter });
-            if (res.code === 200) {
-                setLogs(res.data.list);
-                setTotal(res.data.total);
-            }
-        } catch (err) {
-            console.error('Failed to fetch logs:', err);
-        } finally {
-            setLoading(false);
-        }
-    };
+        const timer = window.setTimeout(() => {
+            void fetchLogs();
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [fetchLogs]);
 
     const columns = [
         {
@@ -75,16 +70,7 @@ const OperationLogsPage: React.FC = () => {
             key: 'action',
             width: 140,
             render: (action: string) => {
-                const label = actionLabels[action] || action;
-                const colors: Record<string, string> = {
-                    'mail_new': 'processing',
-                    'mail_all': 'processing',
-                    'process-mailbox': 'error',
-                    'pool_stats': 'default',
-                    'pool_reset': 'warning',
-                    'emails': 'default',
-                };
-                return <Tag color={colors[action] || 'default'}>{label}</Tag>;
+                return <Tag color={getLogActionColor(action)}>{getLogActionLabel(action)}</Tag>;
             },
         },
         {
@@ -120,15 +106,6 @@ const OperationLogsPage: React.FC = () => {
         },
     ];
 
-    const actionOptions = [
-        { value: 'mail_new', label: '获取最新邮件' },
-        { value: 'mail_all', label: '获取所有邮件' },
-        { value: 'process-mailbox', label: '清空邮箱' },
-        { value: 'pool_stats', label: '邮箱池统计' },
-        { value: 'pool_reset', label: '重置邮箱池' },
-        { value: 'emails', label: '获取邮箱列表' },
-    ];
-
     return (
         <div>
             <PageHeader
@@ -147,8 +124,8 @@ const OperationLogsPage: React.FC = () => {
                         placeholder="筛选操作类型"
                         style={{ width: 160 }}
                         allowClear
-                        options={actionOptions}
-                        onChange={(val) => setActionFilter(val)}
+                        options={LOG_ACTION_OPTIONS}
+                        onChange={(val) => setActionFilter(val as LogAction | undefined)}
                     />
                     <Text type="secondary">
                         提示：只有通过 API Key 调用的接口才会记录日志

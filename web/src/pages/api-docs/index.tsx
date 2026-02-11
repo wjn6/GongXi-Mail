@@ -1,10 +1,33 @@
 import React from 'react';
 import { Typography, Card, Tabs, Tag, Table, Divider, Alert, Row, Col } from 'antd';
+import { LOG_ACTION_OPTIONS } from '../../constants/logActions';
 
 const { Title, Text, Paragraph } = Typography;
 
 const ApiDocsPage: React.FC = () => {
   const baseUrl = window.location.origin;
+
+  const enumRules = [
+    { key: 'role', name: '管理员角色', values: 'SUPER_ADMIN / ADMIN', desc: '用于后台权限判定' },
+    { key: 'status', name: '管理员/API Key 状态', values: 'ACTIVE / DISABLED', desc: '统一使用大写枚举值' },
+  ];
+
+  const logActionDescriptions: Record<string, string> = {
+    get_email: '分配邮箱',
+    mail_new: '获取最新邮件',
+    mail_text: '获取邮件文本',
+    mail_all: '获取所有邮件',
+    process_mailbox: '清空邮箱',
+    list_emails: '获取邮箱列表',
+    pool_stats: '邮箱池统计',
+    pool_reset: '重置邮箱池',
+  };
+
+  const logActionRows = LOG_ACTION_OPTIONS.map((item) => ({
+    action: item.value,
+    label: item.label,
+    description: logActionDescriptions[item.value] || item.label,
+  }));
 
   const authMethods = [
     {
@@ -68,12 +91,18 @@ const ApiDocsPage: React.FC = () => {
       successResponse: `{
   "success": true,
   "data": {
-    "id": "AAMk...",
-    "subject": "验证码邮件",
-    "from": "noreply@example.com",
-    "receivedDateTime": "2024-01-01T12:00:00Z",
-    "bodyPreview": "您的验证码是 123456",
-    "body": { "content": "..." }
+    "email": "example@outlook.com",
+    "mailbox": "inbox",
+    "count": 1,
+    "messages": [
+      {
+        "id": "AAMk...",
+        "subject": "验证码邮件",
+        "from": "noreply@example.com",
+        "text": "您的验证码是 123456"
+      }
+    ],
+    "method": "graph_api"
   },
   "email": "example@outlook.com"
 }`,
@@ -115,10 +144,16 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
   -H "X-API-Key: sk_your_api_key"`,
       successResponse: `{
   "success": true,
-  "data": [
-    { "id": "...", "subject": "邮件1" },
-    { "id": "...", "subject": "邮件2" }
-  ],
+  "data": {
+    "email": "example@outlook.com",
+    "mailbox": "inbox",
+    "count": 2,
+    "messages": [
+      { "id": "...", "subject": "邮件1" },
+      { "id": "...", "subject": "邮件2" }
+    ],
+    "method": "imap"
+  },
   "email": "example@outlook.com"
 }`,
       errorResponse: `{
@@ -147,8 +182,11 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
       successResponse: `{
   "success": true,
   "data": {
-    "deleted": 5,
-    "message": "Deleted 5 emails"
+    "email": "example@outlook.com",
+    "mailbox": "inbox",
+    "status": "success",
+    "deletedCount": 5,
+    "message": "Successfully deleted 5 messages"
   },
   "email": "example@outlook.com"
 }`,
@@ -289,6 +327,71 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
           pagination={false}
           size="small"
           rowKey="method"
+        />
+      </Card>
+
+      <Card title="健康检查与生产配置" style={{ marginBottom: 24 }}>
+        <Alert
+          message="健康检查"
+          description={<Text code>{`${baseUrl}/health`}</Text>}
+          type="success"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <Alert
+          message="生产环境要求"
+          description="JWT_SECRET、ENCRYPTION_KEY、ADMIN_PASSWORD 必须通过外部环境变量注入，不应写死在仓库或镜像中。"
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <Table
+          dataSource={[
+            { key: 'JWT_SECRET', name: 'JWT_SECRET', requirement: '至少 32 字符，随机强密钥' },
+            { key: 'ENCRYPTION_KEY', name: 'ENCRYPTION_KEY', requirement: '固定 32 字符，用于敏感字段加密' },
+            { key: 'ADMIN_PASSWORD', name: 'ADMIN_PASSWORD', requirement: '强密码，不使用默认值' },
+          ]}
+          columns={[
+            { title: '变量', dataIndex: 'name', key: 'name', render: (value: string) => <Text code>{value}</Text> },
+            { title: '要求', dataIndex: 'requirement', key: 'requirement' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="key"
+        />
+      </Card>
+
+      <Card title="枚举约定" style={{ marginBottom: 24 }}>
+        <Table
+          dataSource={enumRules}
+          columns={[
+            { title: '类型', dataIndex: 'name', key: 'name' },
+            { title: '枚举值', dataIndex: 'values', key: 'values', render: (value: string) => <Text code>{value}</Text> },
+            { title: '说明', dataIndex: 'desc', key: 'desc' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="key"
+        />
+      </Card>
+
+      <Card title="操作日志 Action 值" style={{ marginBottom: 24 }}>
+        <Alert
+          message="用于 /admin/dashboard/logs 的 action 筛选"
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <Table
+          dataSource={logActionRows}
+          columns={[
+            { title: 'Action', dataIndex: 'action', key: 'action', render: (value: string) => <Text code>{value}</Text> },
+            { title: '中文含义', dataIndex: 'label', key: 'label' },
+            { title: '说明', dataIndex: 'description', key: 'description' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="action"
         />
       </Card>
 

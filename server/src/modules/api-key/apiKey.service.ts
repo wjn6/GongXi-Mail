@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js';
 import { generateApiKey } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
+import type { Prisma } from '@prisma/client';
 import type { CreateApiKeyInput, UpdateApiKeyInput, ListApiKeyInput } from './apiKey.schema.js';
 
 export const apiKeyService = {
@@ -11,7 +12,7 @@ export const apiKeyService = {
         const { page, pageSize, status, keyword } = input;
         const skip = (page - 1) * pageSize;
 
-        const where: any = {};
+        const where: Prisma.ApiKeyWhereInput = {};
         if (status) where.status = status;
         if (keyword) {
             where.OR = [
@@ -132,9 +133,10 @@ export const apiKeyService = {
             throw new AppError('NOT_FOUND', 'API Key not found', 404);
         }
 
-        const updateData: any = { ...input };
-        if (input.expiresAt) {
-            updateData.expiresAt = new Date(input.expiresAt);
+        const { expiresAt, ...rest } = input;
+        const updateData: Prisma.ApiKeyUpdateInput = { ...rest };
+        if (expiresAt) {
+            updateData.expiresAt = new Date(expiresAt);
         }
 
         const apiKey = await prisma.apiKey.update({

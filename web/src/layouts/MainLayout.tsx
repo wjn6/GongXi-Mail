@@ -25,6 +25,7 @@ import {
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
 import { authApi } from '../api';
+import { isSuperAdmin } from '../utils/auth';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -46,8 +47,9 @@ const MainLayout: React.FC = () => {
     const { admin, clearAuth } = useAuthStore();
     const { token } = theme.useToken();
 
+    const hasSuperAdminPermission = isSuperAdmin(admin?.role);
     const menuItems: MenuProps['items'] = menuConfig
-        .filter(item => !item.superAdmin || admin?.role === 'super_admin')
+        .filter(item => !item.superAdmin || hasSuperAdminPermission)
         .map(item => ({
             key: item.key,
             icon: item.icon,

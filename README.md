@@ -29,11 +29,43 @@
 
 ### Docker 部署
 
+生产环境请先注入密钥（不要写死在仓库）：
+
+```bash
+export JWT_SECRET="replace-with-at-least-32-char-random-secret"
+export ENCRYPTION_KEY="replace-with-32-character-secret-key"
+export ADMIN_PASSWORD="replace-with-strong-password"
+```
+
+然后启动：
+
 ```bash
 docker-compose up -d --build
 ```
 
 访问 http://localhost:3000
+
+### 健康检查
+
+```bash
+curl http://localhost:3000/health
+# {"success":true,"data":{"status":"ok"}}
+```
+
+## 开发质量检查
+
+```bash
+# 前端
+cd web
+npm run lint
+npm run build
+
+# 后端
+cd ../server
+npm run lint
+npm run lint:fix
+npm run build
+```
 
 ## 环境变量
 
@@ -47,7 +79,16 @@ docker-compose up -d --build
 | JWT_EXPIRES_IN | Token 过期时间 | 2h |
 | ENCRYPTION_KEY | 加密密钥 (32字符) | - |
 | ADMIN_USERNAME | 默认管理员用户名 | admin |
-| ADMIN_PASSWORD | 默认管理员密码 | admin123 |
+| ADMIN_PASSWORD | 默认管理员密码（生产必须覆盖） | - |
+
+## 枚举约定
+
+为避免前后端不一致，所有枚举统一使用大写：
+
+| 类型 | 枚举值 |
+|------|--------|
+| 管理员角色 | `SUPER_ADMIN` / `ADMIN` |
+| 管理员/API Key 状态 | `ACTIVE` / `DISABLED` |
 
 ## API 文档
 
@@ -63,7 +104,7 @@ docker-compose up -d --build
 | `/api/mail_new` | 获取最新邮件 | - |
 | `/api/mail_text` | 获取最新邮件文本 (脚本友好) | 可用正则提取内容 |
 | `/api/mail_all` | 获取所有邮件 | - |
-| `/api/process-mailbox` | 清空邮箱 | - |
+| `/api/process-mailbox` | 清空邮箱 | `data.deletedCount` 为删除数量 |
 | `/api/list-emails` | 获取系统所有可用邮箱 | - |
 | `/api/pool-stats` | 邮箱池统计 | - |
 | `/api/reset-pool` | 重置分配记录 | 释放当前 Key 占用的所有邮箱标记 |
@@ -103,6 +144,27 @@ docker-compose up -d --build
 | 参数 | 说明 |
 |------|------|
 | match | 正则表达式，用于提取特定内容 (例如 `\d{6}`) |
+
+## 操作日志 Action 命名
+
+`/admin/dashboard/logs` 中 `action` 字段使用以下固定值：
+
+| Action | 含义 |
+|--------|------|
+| `get_email` | 分配邮箱 |
+| `mail_new` | 获取最新邮件 |
+| `mail_text` | 获取邮件文本 |
+| `mail_all` | 获取所有邮件 |
+| `process_mailbox` | 清空邮箱 |
+| `list_emails` | 获取邮箱列表 |
+| `pool_stats` | 邮箱池统计 |
+| `pool_reset` | 重置邮箱池 |
+
+## 生产配置要求
+
+- `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 必须通过外部环境变量注入。
+- 不要在 `docker-compose.yml`、`.env`、代码仓库中写死生产密钥。
+- `server/.env.example` 仅作为模板，不能直接用于生产。
 
 ## License
 

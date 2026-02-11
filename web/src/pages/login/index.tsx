@@ -4,6 +4,7 @@ import { Form, Input, Button, Card, Typography, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
+import { requestData } from '../../utils/request';
 
 const { Title, Text } = Typography;
 
@@ -19,20 +20,16 @@ const LoginPage: React.FC = () => {
 
     const handleSubmit = async (values: LoginForm) => {
         setLoading(true);
-        try {
-            const res: any = await authApi.login(values.username, values.password);
-            if (res.code === 200) {
-                setAuth(res.data.token, res.data.admin);
-                message.success('登录成功');
-                navigate('/');
-            } else {
-                message.error(res.message || '登录失败');
-            }
-        } catch (err: any) {
-            message.error(err.message || '登录失败');
-        } finally {
-            setLoading(false);
+        const result = await requestData<{ token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN' } }>(
+            () => authApi.login(values.username, values.password),
+            '登录失败'
+        );
+        if (result) {
+            setAuth(result.token, result.admin);
+            message.success('登录成功');
+            navigate('/');
         }
+        setLoading(false);
     };
 
     return (

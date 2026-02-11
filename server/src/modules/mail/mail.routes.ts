@@ -1,7 +1,8 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { mailService } from './mail.service.js';
 import { poolService } from './pool.service.js';
 import { emailService } from '../email/email.service.js';
+import { MAIL_LOG_ACTIONS } from './mail.actions.js';
 import { z } from 'zod';
 import { AppError } from '../../plugins/error.js';
 
@@ -19,6 +20,39 @@ const mailTextRequestSchema = z.object({
     match: z.string().optional(), // 正则表达式 (可选)
 });
 
+function getErrorStatusCode(err: unknown): number {
+    if (!err || typeof err !== 'object') {
+        return 500;
+    }
+
+    const errorObj = err as { name?: unknown; statusCode?: unknown };
+    if (errorObj.name === 'ZodError') {
+        return 400;
+    }
+    return typeof errorObj.statusCode === 'number' ? errorObj.statusCode : 500;
+}
+
+function getErrorMessage(err: unknown): string {
+    if (!err || typeof err !== 'object') {
+        return 'Unknown error';
+    }
+    const message = (err as { message?: unknown }).message;
+    return typeof message === 'string' && message.trim() ? message : 'Unknown error';
+}
+
+function hasErrorCode(err: unknown, code: string): boolean {
+    if (!err || typeof err !== 'object') {
+        return false;
+    }
+    return (err as { code?: unknown }).code === code;
+}
+
+function getGroupNameFromRequest(method: string, query: unknown, body: unknown): string | undefined {
+    const params = (method === 'GET' ? query : body) as Record<string, unknown> | undefined;
+    const groupName = params?.group;
+    return typeof groupName === 'string' ? groupName : undefined;
+}
+
 const mailRoutes: FastifyPluginAsync = async (fastify) => {
     // 所有路由需要 API Key 认证
     fastify.addHook('preHandler', fastify.authenticateApiKey);
@@ -27,43 +61,63 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
     // 新增：获取一个未使用的邮箱地址 (带重试机制)
     // ========================================
     fastify.all('/get-email', async (request) => {
-        if (!request.apiKey?.id) {
-            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
-        }
-
-        const params = request.method === 'GET' ? request.query as any : request.body as any;
-        const groupName = params?.group as string | undefined;
-
-        // 重试 3 次，防止并发冲突
-        for (let i = 0; i < 3; i++) {
-            const email = await poolService.getUnusedEmail(request.apiKey.id, groupName);
-            if (!email) {
-                const stats = await poolService.getStats(request.apiKey.id, groupName);
-                throw new AppError(
-                    'NO_UNUSED_EMAIL',
-                    `No unused emails available${groupName ? ` in group '${groupName}'` : ''}. Used: ${stats.used}/${stats.total}`,
-                    400
-                );
+        const startTime = Date.now();
+        try {
+            if (!request.apiKey?.id) {
+                throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
             }
 
-            try {
-                await poolService.markUsed(request.apiKey.id, email.id);
-                return {
-                    success: true,
-                    data: {
-                        email: email.email,
-                        id: email.id,
-                    },
-                };
-            } catch (err: any) {
-                if (err.code === 'ALREADY_USED') {
-                    continue;
+            const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
+
+            // 重试 3 次，防止并发冲突
+            for (let i = 0; i < 3; i++) {
+                const email = await poolService.getUnusedEmail(request.apiKey.id, groupName);
+                if (!email) {
+                    const stats = await poolService.getStats(request.apiKey.id, groupName);
+                    throw new AppError(
+                        'NO_UNUSED_EMAIL',
+                        `No unused emails available${groupName ? ` in group '${groupName}'` : ''}. Used: ${stats.used}/${stats.total}`,
+                        400
+                    );
                 }
-                throw err;
-            }
-        }
 
-        throw new AppError('CONCURRENCY_LIMIT', 'System busy, please try again', 429);
+                try {
+                    await poolService.markUsed(request.apiKey.id, email.id);
+                    await mailService.logApiCall(
+                        MAIL_LOG_ACTIONS.GET_EMAIL,
+                        request.apiKey.id,
+                        email.id,
+                        request.ip,
+                        200,
+                        Date.now() - startTime
+                    );
+                    return {
+                        success: true,
+                        data: {
+                            email: email.email,
+                            id: email.id,
+                        },
+                    };
+                } catch (err: unknown) {
+                    if (hasErrorCode(err, 'ALREADY_USED')) {
+                        continue;
+                    }
+                    throw err;
+                }
+            }
+
+            throw new AppError('CONCURRENCY_LIMIT', 'System busy, please try again', 429);
+        } catch (err: unknown) {
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.GET_EMAIL,
+                request.apiKey?.id,
+                undefined,
+                request.ip,
+                getErrorStatusCode(err),
+                Date.now() - startTime
+            );
+            throw err;
+        }
     });
 
     // ========================================
@@ -104,7 +158,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             await mailService.updateEmailStatus(credentials.id, true);
 
             await mailService.logApiCall(
-                'mail_new',
+                MAIL_LOG_ACTIONS.MAIL_NEW,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -117,10 +171,10 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 data: result,
                 email: credentials.email,
             };
-        } catch (err: any) {
-            await mailService.updateEmailStatus(credentials.id, false, err.message);
+        } catch (err: unknown) {
+            await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));
             await mailService.logApiCall(
-                'mail_new',
+                MAIL_LOG_ACTIONS.MAIL_NEW,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -167,7 +221,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
 
             await mailService.updateEmailStatus(credentials.id, true);
             await mailService.logApiCall(
-                'mail_text',
+                MAIL_LOG_ACTIONS.MAIL_TEXT,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -196,7 +250,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                         reply.code(404).type('text/plain').send('Error: No match found');
                         return;
                     }
-                } catch (e) {
+                } catch (_e) {
                     reply.code(400).type('text/plain').send('Error: Invalid regex pattern');
                     return;
                 }
@@ -204,17 +258,17 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
 
             return reply.type('text/plain').send(content);
 
-        } catch (err: any) {
-            await mailService.updateEmailStatus(credentials.id, false, err.message);
+        } catch (err: unknown) {
+            await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));
             await mailService.logApiCall(
-                'mail_text',
+                MAIL_LOG_ACTIONS.MAIL_TEXT,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
                 500,
                 Date.now() - startTime
             );
-            reply.code(500).type('text/plain').send(`Error: ${err.message}`);
+            reply.code(500).type('text/plain').send(`Error: ${getErrorMessage(err)}`);
         }
     });
 
@@ -254,7 +308,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             await mailService.updateEmailStatus(credentials.id, true);
 
             await mailService.logApiCall(
-                'mail_all',
+                MAIL_LOG_ACTIONS.MAIL_ALL,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -267,10 +321,10 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 data: result,
                 email: credentials.email,
             };
-        } catch (err: any) {
-            await mailService.updateEmailStatus(credentials.id, false, err.message);
+        } catch (err: unknown) {
+            await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));
             await mailService.logApiCall(
-                'mail_all',
+                MAIL_LOG_ACTIONS.MAIL_ALL,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -317,7 +371,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             await mailService.updateEmailStatus(credentials.id, true);
 
             await mailService.logApiCall(
-                'process_mailbox',
+                MAIL_LOG_ACTIONS.PROCESS_MAILBOX,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -330,10 +384,10 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 data: result,
                 email: credentials.email,
             };
-        } catch (err: any) {
-            await mailService.updateEmailStatus(credentials.id, false, err.message);
+        } catch (err: unknown) {
+            await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));
             await mailService.logApiCall(
-                'process_mailbox',
+                MAIL_LOG_ACTIONS.PROCESS_MAILBOX,
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
@@ -348,53 +402,118 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
     // 列出系统 ACTIVE 邮箱（支持分组过滤）
     // ========================================
     fastify.all('/list-emails', async (request) => {
-        if (!request.apiKey?.id) {
-            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+        const startTime = Date.now();
+        try {
+            if (!request.apiKey?.id) {
+                throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+            }
+
+            const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
+
+            const result = await emailService.list({ page: 1, pageSize: 1000, status: 'ACTIVE', groupName });
+            const emails = result.list.map((emailItem: { email: string; status: string; group?: { name: string } | null }) => ({
+                email: emailItem.email,
+                status: emailItem.status,
+                group: emailItem.group?.name || null,
+            }));
+
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.LIST_EMAILS,
+                request.apiKey.id,
+                undefined,
+                request.ip,
+                200,
+                Date.now() - startTime
+            );
+
+            return {
+                success: true,
+                data: {
+                    total: result.total,
+                    emails: emails,
+                },
+            };
+        } catch (err: unknown) {
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.LIST_EMAILS,
+                request.apiKey?.id,
+                undefined,
+                request.ip,
+                getErrorStatusCode(err),
+                Date.now() - startTime
+            );
+            throw err;
         }
-
-        const params = request.method === 'GET' ? request.query as any : request.body as any;
-        const groupName = params?.group as string | undefined;
-
-        const result = await emailService.list({ page: 1, pageSize: 1000, status: 'ACTIVE', groupName });
-        const emails = result.list.map((e: any) => ({
-            email: e.email,
-            status: e.status,
-            group: e.group?.name || null,
-        }));
-
-        return {
-            success: true,
-            data: {
-                total: result.total,
-                emails: emails,
-            },
-        };
     });
 
     // ========================================
     // 邮箱池统计（支持分组过滤）
     // ========================================
     fastify.all('/pool-stats', async (request) => {
-        if (!request.apiKey?.id) {
-            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+        const startTime = Date.now();
+        try {
+            if (!request.apiKey?.id) {
+                throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+            }
+            const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
+            const stats = await poolService.getStats(request.apiKey.id, groupName);
+
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.POOL_STATS,
+                request.apiKey.id,
+                undefined,
+                request.ip,
+                200,
+                Date.now() - startTime
+            );
+
+            return { success: true, data: stats };
+        } catch (err: unknown) {
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.POOL_STATS,
+                request.apiKey?.id,
+                undefined,
+                request.ip,
+                getErrorStatusCode(err),
+                Date.now() - startTime
+            );
+            throw err;
         }
-        const params = request.method === 'GET' ? request.query as any : request.body as any;
-        const groupName = params?.group as string | undefined;
-        const stats = await poolService.getStats(request.apiKey.id, groupName);
-        return { success: true, data: stats };
     });
 
     // ========================================
     // 重置邮箱池（支持分组过滤）
     // ========================================
     fastify.all('/reset-pool', async (request) => {
-        if (!request.apiKey?.id) {
-            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+        const startTime = Date.now();
+        try {
+            if (!request.apiKey?.id) {
+                throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+            }
+            const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
+            await poolService.reset(request.apiKey.id, groupName);
+
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.POOL_RESET,
+                request.apiKey.id,
+                undefined,
+                request.ip,
+                200,
+                Date.now() - startTime
+            );
+
+            return { success: true, data: { message: `Pool reset successfully${groupName ? ` for group '${groupName}'` : ''}` } };
+        } catch (err: unknown) {
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.POOL_RESET,
+                request.apiKey?.id,
+                undefined,
+                request.ip,
+                getErrorStatusCode(err),
+                Date.now() - startTime
+            );
+            throw err;
         }
-        const params = request.method === 'GET' ? request.query as any : request.body as any;
-        const groupName = params?.group as string | undefined;
-        await poolService.reset(request.apiKey.id, groupName);
-        return { success: true, data: { message: `Pool reset successfully${groupName ? ` for group '${groupName}'` : ''}` } };
     });
 };
 

@@ -1,6 +1,14 @@
 import prisma from '../../lib/prisma.js';
 import { decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
+import type { Prisma } from '@prisma/client';
+
+function hasErrorCode(error: unknown, code: string): boolean {
+    if (!error || typeof error !== 'object') {
+        return false;
+    }
+    return (error as { code?: unknown }).code === code;
+}
 
 /**
  * 根据分组名解析 groupId，返回 undefined 表示不过滤
@@ -21,7 +29,7 @@ export const poolService = {
     async getUnusedEmail(apiKeyId: number, groupName?: string) {
         const groupId = await resolveGroupId(groupName);
 
-        const where: any = {
+        const where: Prisma.EmailAccountWhereInput = {
             status: 'ACTIVE',
             NOT: {
                 usages: {
@@ -62,8 +70,8 @@ export const poolService = {
             await prisma.emailUsage.create({
                 data: { apiKeyId, emailAccountId, usedAt: new Date() },
             });
-        } catch (error: any) {
-            if (error.code === 'P2002') {
+        } catch (error: unknown) {
+            if (hasErrorCode(error, 'P2002')) {
                 throw new AppError('ALREADY_USED', 'Email already allocated to this API Key', 409);
             }
             throw error;
@@ -120,7 +128,7 @@ export const poolService = {
     async getStats(apiKeyId: number, groupName?: string) {
         const groupId = await resolveGroupId(groupName);
 
-        const emailWhere: any = { status: 'ACTIVE' };
+        const emailWhere: Prisma.EmailAccountWhereInput = { status: 'ACTIVE' };
         if (groupId !== undefined) {
             emailWhere.groupId = groupId;
         }
@@ -133,7 +141,7 @@ export const poolService = {
             })).map((e: { id: number }) => e.id)
             : undefined;
 
-        const usageWhere: any = { apiKeyId };
+        const usageWhere: Prisma.EmailUsageWhereInput = { apiKeyId };
         if (emailIds) {
             usageWhere.emailAccountId = { in: emailIds };
         }
@@ -178,7 +186,7 @@ export const poolService = {
      * 获取所有邮箱及其使用状态 (Admin 用)
      */
     async getEmailsWithUsage(apiKeyId: number, groupId?: number) {
-        const emailWhere: any = { status: 'ACTIVE' };
+        const emailWhere: Prisma.EmailAccountWhereInput = { status: 'ACTIVE' };
         if (groupId !== undefined) {
             emailWhere.groupId = groupId;
         }

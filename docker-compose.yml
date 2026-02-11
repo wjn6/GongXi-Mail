@@ -12,13 +12,11 @@ services:
       - PORT=3000
       - DATABASE_URL=postgresql://oauth2api:oauth2api_secret@postgres:5432/oauth2api
       - REDIS_URL=redis://redis:6379
-      # - JWT_SECRET=your-super-secret-jwt-key-minimum-32-chars
-      - JWT_SECRET=7cd3e0dbd593d33658274cc53912bb62c73a9063f4cbb34c56be43b6cb422f387
+      - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=2h
-      # - ENCRYPTION_KEY=your-32-character-encryption-key!
-      - ENCRYPTION_KEY=5b01df0d1bf30d2da4f2cdbb6d677064
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin123
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -28,7 +26,7 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/admin/auth/me"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

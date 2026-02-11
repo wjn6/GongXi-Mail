@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     Table,
     Button,
@@ -15,7 +15,6 @@ import {
     Tooltip,
     List,
     Tabs,
-    Card,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -30,6 +29,8 @@ import {
     GroupOutlined,
 } from '@ant-design/icons';
 import { emailApi, groupApi } from '../../api';
+import { getErrorMessage } from '../../utils/error';
+import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -57,6 +58,24 @@ interface EmailAccount {
     createdAt: string;
 }
 
+interface EmailListResult {
+    list: EmailAccount[];
+    total: number;
+}
+
+interface MailItem {
+    id: string;
+    from: string;
+    subject: string;
+    text: string;
+    html: string;
+    date: string;
+}
+
+interface EmailDetailsResult extends EmailAccount {
+    refreshToken: string;
+}
+
 const EmailsPage: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<EmailAccount[]>([]);
@@ -72,7 +91,7 @@ const EmailsPage: React.FC = () => {
     const [filterGroupId, setFilterGroupId] = useState<number | undefined>(undefined);
     const [importContent, setImportContent] = useState('');
     const [separator, setSeparator] = useState('----');
-    const [mailList, setMailList] = useState<any[]>([]);
+    const [mailList, setMailList] = useState<MailItem[]>([]);
     const [mailLoading, setMailLoading] = useState(false);
     const [currentEmail, setCurrentEmail] = useState<string>('');
     const [currentEmailId, setCurrentEmailId] = useState<number | null>(null);
@@ -90,41 +109,46 @@ const EmailsPage: React.FC = () => {
     const [assignGroupModalVisible, setAssignGroupModalVisible] = useState(false);
     const [assignTargetGroupId, setAssignTargetGroupId] = useState<number | undefined>(undefined);
 
-    useEffect(() => {
-        fetchGroups();
+    const fetchGroups = useCallback(async () => {
+        const result = await requestData<EmailGroup[]>(
+            () => groupApi.getList(),
+            '获取分组失败',
+            { silent: true }
+        );
+        if (result) {
+            setGroups(result);
+        }
     }, []);
 
-    useEffect(() => {
-        fetchData();
-    }, [page, pageSize, keyword, filterGroupId]);
-
-    const fetchGroups = async () => {
-        try {
-            const res: any = await groupApi.getList();
-            if (res.code === 200) {
-                setGroups(res.data);
-            }
-        } catch (err) {
-            // silent
-        }
-    };
-
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true);
-        try {
-            const params: any = { page, pageSize, keyword };
-            if (filterGroupId) params.groupId = filterGroupId;
-            const res: any = await emailApi.getList(params);
-            if (res.code === 200) {
-                setData(res.data.list);
-                setTotal(res.data.total);
-            }
-        } catch (err) {
-            message.error('获取数据失败');
-        } finally {
-            setLoading(false);
+        const params: { page: number; pageSize: number; keyword: string; groupId?: number } = { page, pageSize, keyword };
+        if (filterGroupId) params.groupId = filterGroupId;
+
+        const result = await requestData<EmailListResult>(
+            () => emailApi.getList(params),
+            '获取数据失败'
+        );
+        if (result) {
+            setData(result.list);
+            setTotal(result.total);
         }
-    };
+        setLoading(false);
+    }, [filterGroupId, keyword, page, pageSize]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void fetchGroups();
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [fetchGroups]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            void fetchData();
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [fetchData]);
 
     const handleCreate = () => {
         setEditingId(null);
@@ -135,32 +159,33 @@ const EmailsPage: React.FC = () => {
     const handleEdit = async (record: EmailAccount) => {
         setEditingId(record.id);
         try {
-            const res: any = await emailApi.getById(record.id, true);
+            const res = await emailApi.getById<EmailDetailsResult>(record.id, true);
             if (res.code === 200) {
+                const details = res.data;
                 form.setFieldsValue({
-                    email: res.data.email,
-                    clientId: res.data.clientId,
-                    refreshToken: res.data.refreshToken,
-                    status: res.data.status,
+                    email: details.email,
+                    clientId: details.clientId,
+                    refreshToken: details.refreshToken,
+                    status: details.status,
                 });
                 setModalVisible(true);
             }
-        } catch (err) {
+        } catch {
             message.error('获取详情失败');
         }
     };
 
     const handleDelete = async (id: number) => {
         try {
-            const res: any = await emailApi.delete(id);
+            const res = await emailApi.delete(id);
             if (res.code === 200) {
                 message.success('删除成功');
                 fetchData();
             } else {
                 message.error(res.message);
             }
-        } catch (err: any) {
-            message.error(err.message || '删除失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '删除失败'));
         }
     };
 
@@ -171,7 +196,7 @@ const EmailsPage: React.FC = () => {
         }
 
         try {
-            const res: any = await emailApi.batchDelete(selectedRowKeys as number[]);
+            const res = await emailApi.batchDelete(selectedRowKeys as number[]);
             if (res.code === 200) {
                 message.success(`成功删除 ${res.data.deleted} 个邮箱`);
                 setSelectedRowKeys([]);
@@ -179,8 +204,8 @@ const EmailsPage: React.FC = () => {
             } else {
                 message.error(res.message);
             }
-        } catch (err: any) {
-            message.error(err.message || '删除失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '删除失败'));
         }
     };
 
@@ -189,7 +214,7 @@ const EmailsPage: React.FC = () => {
             const values = await form.validateFields();
 
             if (editingId) {
-                const res: any = await emailApi.update(editingId, values);
+                const res = await emailApi.update(editingId, values);
                 if (res.code === 200) {
                     message.success('更新成功');
                     setModalVisible(false);
@@ -198,7 +223,7 @@ const EmailsPage: React.FC = () => {
                     message.error(res.message);
                 }
             } else {
-                const res: any = await emailApi.create(values);
+                const res = await emailApi.create(values);
                 if (res.code === 200) {
                     message.success('创建成功');
                     setModalVisible(false);
@@ -207,10 +232,8 @@ const EmailsPage: React.FC = () => {
                     message.error(res.message);
                 }
             }
-        } catch (err: any) {
-            if (err.message) {
-                message.error(err.message);
-            }
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '保存失败'));
         }
     };
 
@@ -221,7 +244,7 @@ const EmailsPage: React.FC = () => {
         }
 
         try {
-            const res: any = await emailApi.import(importContent, separator);
+            const res = await emailApi.import(importContent, separator);
             if (res.code === 200) {
                 message.success(res.message);
                 setImportModalVisible(false);
@@ -230,17 +253,22 @@ const EmailsPage: React.FC = () => {
             } else {
                 message.error(res.message);
             }
-        } catch (err: any) {
-            message.error(err.message || '导入失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '导入失败'));
         }
     };
 
     const handleExport = async () => {
         try {
             const ids = selectedRowKeys.length > 0 ? selectedRowKeys as number[] : undefined;
-            const content = await emailApi.export(ids, separator);
+            const res = await emailApi.export(ids, separator);
+            if (res.code !== 200) {
+                message.error(res.message || '导出失败');
+                return;
+            }
+            const content = res.data?.content || '';
 
-            const blob = new Blob([content as any], { type: 'text/plain' });
+            const blob = new Blob([content], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -249,65 +277,55 @@ const EmailsPage: React.FC = () => {
             URL.revokeObjectURL(url);
 
             message.success('导出成功');
-        } catch (err: any) {
-            message.error(err.message || '导出失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '导出失败'));
         }
+    };
+
+    const loadMails = async (emailId: number, mailbox: string, showSuccessToast: boolean = false) => {
+        setMailLoading(true);
+        const result = await requestData<{ messages: MailItem[] }>(
+            () => emailApi.viewMails(emailId, mailbox),
+            '获取邮件失败'
+        );
+        if (result) {
+            setMailList(result.messages || []);
+            if (showSuccessToast) {
+                message.success('刷新成功');
+            }
+        }
+        setMailLoading(false);
     };
 
     const handleViewMails = async (record: EmailAccount, mailbox: string) => {
         setCurrentEmail(record.email);
         setCurrentEmailId(record.id);
         setCurrentMailbox(mailbox);
-        setMailLoading(true);
         setMailModalVisible(true);
-        try {
-            const res: any = await emailApi.viewMails(record.id, mailbox);
-            if (res.code === 200) {
-                setMailList(res.data?.messages || []);
-            } else {
-                message.error(res.message || '获取邮件失败');
-            }
-        } catch (err: any) {
-            message.error(err.message || '获取邮件失败');
-        } finally {
-            setMailLoading(false);
-        }
+        await loadMails(record.id, mailbox);
     };
 
     const handleRefreshMails = async () => {
         if (!currentEmailId) return;
-        setMailLoading(true);
-        try {
-            const res: any = await emailApi.viewMails(currentEmailId, currentMailbox);
-            if (res.code === 200) {
-                setMailList(res.data?.messages || []);
-                message.success('刷新成功');
-            } else {
-                message.error(res.message || '获取邮件失败');
-            }
-        } catch (err: any) {
-            message.error(err.message || '获取邮件失败');
-        } finally {
-            setMailLoading(false);
-        }
+        await loadMails(currentEmailId, currentMailbox, true);
     };
 
     const handleClearMailbox = async () => {
         if (!currentEmailId) return;
         try {
-            const res: any = await emailApi.clearMailbox(currentEmailId, currentMailbox);
+            const res = await emailApi.clearMailbox(currentEmailId, currentMailbox);
             if (res.code === 200) {
-                message.success(`已清空 ${res.data?.deleted || 0} 封邮件`);
+                message.success(`已清空 ${res.data?.deletedCount || 0} 封邮件`);
                 setMailList([]);
             } else {
                 message.error(res.message || '清空失败');
             }
-        } catch (err: any) {
-            message.error(err.message || '清空失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '清空失败'));
         }
     };
 
-    const handleViewEmailDetail = (record: any) => {
+    const handleViewEmailDetail = (record: MailItem) => {
         setEmailDetailSubject(record.subject || '无主题');
         setEmailDetailContent(record.html || record.text || '无内容');
         setEmailDetailVisible(true);
@@ -330,14 +348,14 @@ const EmailsPage: React.FC = () => {
 
     const handleDeleteGroup = async (id: number) => {
         try {
-            const res: any = await groupApi.delete(id);
+            const res = await groupApi.delete(id);
             if (res.code === 200) {
                 message.success('分组已删除');
                 fetchGroups();
                 fetchData();
             }
-        } catch (err: any) {
-            message.error(err.message || '删除失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '删除失败'));
         }
     };
 
@@ -345,22 +363,22 @@ const EmailsPage: React.FC = () => {
         try {
             const values = await groupForm.validateFields();
             if (editingGroupId) {
-                const res: any = await groupApi.update(editingGroupId, values);
+                const res = await groupApi.update(editingGroupId, values);
                 if (res.code === 200) {
                     message.success('分组已更新');
                     setGroupModalVisible(false);
                     fetchGroups();
                 }
             } else {
-                const res: any = await groupApi.create(values);
+                const res = await groupApi.create(values);
                 if (res.code === 200) {
                     message.success('分组已创建');
                     setGroupModalVisible(false);
                     fetchGroups();
                 }
             }
-        } catch (err: any) {
-            if (err.message) message.error(err.message);
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '分组保存失败'));
         }
     };
 
@@ -374,7 +392,7 @@ const EmailsPage: React.FC = () => {
             return;
         }
         try {
-            const res: any = await groupApi.assignEmails(assignTargetGroupId, selectedRowKeys as number[]);
+            const res = await groupApi.assignEmails(assignTargetGroupId, selectedRowKeys as number[]);
             if (res.code === 200) {
                 message.success(`已将 ${res.data.count} 个邮箱分配到分组`);
                 setAssignGroupModalVisible(false);
@@ -383,8 +401,8 @@ const EmailsPage: React.FC = () => {
                 fetchData();
                 fetchGroups();
             }
-        } catch (err: any) {
-            message.error(err.message || '分配失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '分配失败'));
         }
     };
 
@@ -406,8 +424,8 @@ const EmailsPage: React.FC = () => {
             setSelectedRowKeys([]);
             fetchData();
             fetchGroups();
-        } catch (err: any) {
-            message.error(err.message || '移出失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '移出失败'));
         }
     };
 
@@ -432,7 +450,7 @@ const EmailsPage: React.FC = () => {
             dataIndex: 'group',
             key: 'group',
             width: 120,
-            render: (group: any) =>
+            render: (group: EmailAccount['group']) =>
                 group ? <Tag color="blue">{group.name}</Tag> : <Tag>未分组</Tag>,
         },
         {
@@ -579,7 +597,7 @@ const EmailsPage: React.FC = () => {
                                             placeholder="搜索邮箱"
                                             prefix={<SearchOutlined />}
                                             value={keyword}
-                                            onChange={(e: any) => setKeyword(e.target.value)}
+                                            onChange={(e) => setKeyword(e.target.value)}
                                             style={{ width: 200 }}
                                             allowClear
                                         />
@@ -728,11 +746,11 @@ const EmailsPage: React.FC = () => {
                     <Input
                         addonBefore="分隔符"
                         value={separator}
-                        onChange={(e: any) => setSeparator(e.target.value)}
+                        onChange={(e) => setSeparator(e.target.value)}
                         style={{ width: 200 }}
                     />
                     <Dragger
-                        beforeUpload={(file: any) => {
+                        beforeUpload={(file) => {
                             const reader = new FileReader();
                             reader.onload = (e) => {
                                 const fileContent = e.target?.result as string;
@@ -766,7 +784,7 @@ const EmailsPage: React.FC = () => {
                     <TextArea
                         rows={12}
                         value={importContent}
-                        onChange={(e: any) => setImportContent(e.target.value)}
+                        onChange={(e) => setImportContent(e.target.value)}
                         placeholder={`example@outlook.com${separator}client_id${separator}refresh_token`}
                     />
                 </Space>
@@ -807,7 +825,7 @@ const EmailsPage: React.FC = () => {
                         style: { marginTop: 16 },
                     }}
                     style={{ maxHeight: 450, overflow: 'auto' }}
-                    renderItem={(item: any) => (
+                    renderItem={(item: MailItem) => (
                         <List.Item
                             key={item.id}
                             actions={[

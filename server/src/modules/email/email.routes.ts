@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { emailService } from './email.service.js';
 import { mailService } from '../mail/mail.service.js';
 import { createEmailSchema, updateEmailSchema, listEmailSchema, importEmailSchema } from './email.schema.js';

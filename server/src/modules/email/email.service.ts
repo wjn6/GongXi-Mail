@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js';
 import { encrypt, decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
+import type { Prisma } from '@prisma/client';
 import type { CreateEmailInput, UpdateEmailInput, ListEmailInput, ImportEmailInput } from './email.schema.js';
 
 export const emailService = {
@@ -11,7 +12,7 @@ export const emailService = {
         const { page, pageSize, status, keyword, groupId, groupName } = input;
         const skip = (page - 1) * pageSize;
 
-        const where: any = {};
+        const where: Prisma.EmailAccountWhereInput = {};
         if (status) where.status = status;
         if (keyword) {
             where.email = { contains: keyword };
@@ -72,8 +73,11 @@ export const emailService = {
 
         // 解密敏感信息
         if (includeSecrets) {
-            if (email.refreshToken) (email as any).refreshToken = decrypt(email.refreshToken);
-            if (email.password) (email as any).password = decrypt(email.password);
+            return {
+                ...email,
+                refreshToken: email.refreshToken ? decrypt(email.refreshToken) : email.refreshToken,
+                password: email.password ? decrypt(email.password) : email.password,
+            };
         }
 
         return email;
@@ -151,14 +155,15 @@ export const emailService = {
             throw new AppError('NOT_FOUND', 'Email account not found', 404);
         }
 
-        const updateData: any = { ...input };
+        const { refreshToken, password, ...rest } = input;
+        const updateData: Prisma.EmailAccountUpdateInput = { ...rest };
 
         // 加密 sensitive data
-        if (input.refreshToken) {
-            updateData.refreshToken = encrypt(input.refreshToken);
+        if (refreshToken) {
+            updateData.refreshToken = encrypt(refreshToken);
         }
-        if (input.password) {
-            updateData.password = encrypt(input.password);
+        if (password) {
+            updateData.password = encrypt(password);
         }
 
         const account = await prisma.emailAccount.update({
@@ -261,7 +266,7 @@ export const emailService = {
                     throw new Error('Missing required fields');
                 }
 
-                const data: any = {
+                const data: Prisma.EmailAccountUpdateInput = {
                     clientId,
                     refreshToken: encrypt(refreshToken),
                     status: 'ACTIVE',
@@ -278,9 +283,17 @@ export const emailService = {
                     });
                 } else {
                     // 创建
-                    data.email = email;
+                    const createData: Prisma.EmailAccountCreateInput = {
+                        email,
+                        clientId,
+                        refreshToken: encrypt(refreshToken),
+                        status: 'ACTIVE',
+                    };
+                    if (password) {
+                        createData.password = encrypt(password);
+                    }
                     await prisma.emailAccount.create({
-                        data,
+                        data: createData,
                     });
                 }
                 success++;

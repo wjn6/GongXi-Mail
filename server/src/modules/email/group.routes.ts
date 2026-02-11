@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { groupService } from './group.service.js';
 import { createGroupSchema, updateGroupSchema, assignEmailsSchema } from './group.schema.js';
 

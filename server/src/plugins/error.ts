@@ -1,4 +1,4 @@
-import { FastifyPluginAsync, FastifyError, FastifyReply, FastifyRequest } from 'fastify';
+import { type FastifyPluginAsync, type FastifyError, type FastifyReply, type FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
 import { logger } from '../lib/logger.js';

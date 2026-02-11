@@ -5,7 +5,7 @@ interface Admin {
     id: number;
     username: string;
     email?: string;
-    role: 'super_admin' | 'admin';
+    role: 'SUPER_ADMIN' | 'ADMIN';
 }
 
 interface AuthState {

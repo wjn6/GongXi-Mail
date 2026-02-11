@@ -7,7 +7,6 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 import { env } from './config/env.js';
-import { logger } from './lib/logger.js';
 import errorPlugin from './plugins/error.js';
 import authPlugin from './plugins/auth.js';
 
@@ -47,6 +46,16 @@ export async function buildApp() {
     // 自定义插件
     await fastify.register(errorPlugin);
     await fastify.register(authPlugin);
+
+    // 健康检查
+    fastify.get('/health', async () => {
+        return {
+            success: true,
+            data: {
+                status: 'ok',
+            },
+        };
+    });
 
     // 静态文件（前端）- 禁用 fastify-static 的默认 404 处理
     await fastify.register(fastifyStatic, {

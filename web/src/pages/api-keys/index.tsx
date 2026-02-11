@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     Table,
     Button,
@@ -34,6 +34,8 @@ import {
     ThunderboltOutlined,
 } from '@ant-design/icons';
 import { apiKeyApi, groupApi } from '../../api';
+import { getErrorMessage } from '../../utils/error';
+import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -64,6 +66,19 @@ interface PoolStats {
     remaining: number;
 }
 
+interface PoolEmailItem {
+    id: number;
+    email: string;
+    used: boolean;
+    groupId: number | null;
+    groupName: string | null;
+}
+
+interface ApiKeyListResult {
+    list: ApiKey[];
+    total: number;
+}
+
 const ApiKeysPage: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<ApiKey[]>([]);
@@ -78,7 +93,7 @@ const ApiKeysPage: React.FC = () => {
     const [poolStats, setPoolStats] = useState<PoolStats | null>(null);
     const [poolLoading, setPoolLoading] = useState(false);
     const [currentApiKey, setCurrentApiKey] = useState<ApiKey | null>(null);
-    const [emailList, setEmailList] = useState<{ id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }[]>([]);
+    const [emailList, setEmailList] = useState<PoolEmailItem[]>([]);
     const [selectedEmails, setSelectedEmails] = useState<number[]>([]);
     const [emailModalVisible, setEmailModalVisible] = useState(false);
     const [emailLoading, setEmailLoading] = useState(false);
@@ -88,39 +103,39 @@ const ApiKeysPage: React.FC = () => {
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
     const [form] = Form.useForm();
 
+    const extractUsedEmailIds = (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id);
+
+    const fetchGroups = useCallback(async () => {
+        const result = await requestData<EmailGroup[]>(
+            () => groupApi.getList(),
+            '获取分组失败',
+            { silent: true }
+        );
+        if (result) {
+            setGroups(result);
+        }
+    }, []);
+
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        const result = await requestData<ApiKeyListResult>(
+            () => apiKeyApi.getList({ page, pageSize }),
+            '获取数据失败'
+        );
+        if (result) {
+            setData(result.list);
+            setTotal(result.total);
+        }
+        setLoading(false);
+    }, [page, pageSize]);
+
     useEffect(() => {
         fetchGroups();
-    }, []);
+    }, [fetchGroups]);
 
     useEffect(() => {
         fetchData();
-    }, [page, pageSize]);
-
-    const fetchGroups = async () => {
-        try {
-            const res: any = await groupApi.getList();
-            if (res.code === 200) {
-                setGroups(res.data);
-            }
-        } catch (err) {
-            // 忽略
-        }
-    };
-
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const res: any = await apiKeyApi.getList({ page, pageSize });
-            if (res.code === 200) {
-                setData(res.data.list);
-                setTotal(res.data.total);
-            }
-        } catch (err) {
-            message.error('获取数据失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    }, [fetchData]);
 
     const handleCreate = () => {
         setEditingId(null);
@@ -141,15 +156,15 @@ const ApiKeysPage: React.FC = () => {
 
     const handleDelete = async (id: number) => {
         try {
-            const res: any = await apiKeyApi.delete(id);
+            const res = await apiKeyApi.delete(id);
             if (res.code === 200) {
                 message.success('删除成功');
                 fetchData();
             } else {
                 message.error(res.message);
             }
-        } catch (err: any) {
-            message.error(err.message || '删除失败');
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '删除失败'));
         }
     };
 
@@ -162,7 +177,7 @@ const ApiKeysPage: React.FC = () => {
             };
 
             if (editingId) {
-                const res: any = await apiKeyApi.update(editingId, submitData);
+                const res = await apiKeyApi.update(editingId, submitData);
                 if (res.code === 200) {
                     message.success('更新成功');
                     setModalVisible(false);
@@ -171,7 +186,7 @@ const ApiKeysPage: React.FC = () => {
                     message.error(res.message);
                 }
             } else {
-                const res: any = await apiKeyApi.create(submitData);
+                const res = await apiKeyApi.create(submitData);
                 if (res.code === 200) {
                     setModalVisible(false);
                     setNewKey(res.data.key);
@@ -181,10 +196,8 @@ const ApiKeysPage: React.FC = () => {
                     message.error(res.message);
                 }
             }
-        } catch (err: any) {
-            if (err.message) {
-                message.error(err.message);
-            }
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '保存失败'));
         }
     };
 
@@ -194,11 +207,11 @@ const ApiKeysPage: React.FC = () => {
         setPoolModalVisible(true);
         setPoolLoading(true);
         try {
-            const res: any = await apiKeyApi.getUsage(record.id);
+            const res = await apiKeyApi.getUsage(record.id);
             if (res.code === 200) {
                 setPoolStats(res.data);
             }
-        } catch (err) {
+        } catch {
             message.error('获取邮箱池数据失败');
         } finally {
             setPoolLoading(false);
@@ -210,11 +223,11 @@ const ApiKeysPage: React.FC = () => {
         if (!currentApiKey) return;
         setPoolLoading(true);
         try {
-            const res: any = await apiKeyApi.getUsage(currentApiKey.id, groupName);
+            const res = await apiKeyApi.getUsage(currentApiKey.id, groupName);
             if (res.code === 200) {
                 setPoolStats(res.data);
             }
-        } catch (err) {
+        } catch {
             message.error('获取邮箱池数据失败');
         } finally {
             setPoolLoading(false);
@@ -224,18 +237,18 @@ const ApiKeysPage: React.FC = () => {
     const handleResetPool = async () => {
         if (!currentApiKey) return;
         try {
-            const res: any = await apiKeyApi.resetPool(currentApiKey.id, poolGroupName);
+            const res = await apiKeyApi.resetPool(currentApiKey.id, poolGroupName);
             if (res.code === 200) {
                 message.success('邮箱池已重置');
                 // 刷新统计
-                const statsRes: any = await apiKeyApi.getUsage(currentApiKey.id, poolGroupName);
+                const statsRes = await apiKeyApi.getUsage(currentApiKey.id, poolGroupName);
                 if (statsRes.code === 200) {
                     setPoolStats(statsRes.data);
                 }
             } else {
                 message.error(res.message || '重置失败');
             }
-        } catch (err) {
+        } catch {
             message.error('重置失败');
         }
     };
@@ -247,12 +260,13 @@ const ApiKeysPage: React.FC = () => {
         setEmailModalVisible(true);
         setEmailLoading(true);
         try {
-            const res: any = await apiKeyApi.getPoolEmails(record.id);
+            const res = await apiKeyApi.getPoolEmails<PoolEmailItem>(record.id);
             if (res.code === 200) {
-                setEmailList(res.data);
-                setSelectedEmails(res.data.filter((e: any) => e.used).map((e: any) => e.id));
+                const emails = res.data;
+                setEmailList(emails);
+                setSelectedEmails(extractUsedEmailIds(emails));
             }
-        } catch (err) {
+        } catch {
             message.error('获取邮箱列表失败');
         } finally {
             setEmailLoading(false);
@@ -264,12 +278,13 @@ const ApiKeysPage: React.FC = () => {
         if (!currentApiKey) return;
         setEmailLoading(true);
         try {
-            const res: any = await apiKeyApi.getPoolEmails(currentApiKey.id, groupId);
+            const res = await apiKeyApi.getPoolEmails<PoolEmailItem>(currentApiKey.id, groupId);
             if (res.code === 200) {
-                setEmailList(res.data);
-                setSelectedEmails(res.data.filter((e: any) => e.used).map((e: any) => e.id));
+                const emails = res.data;
+                setEmailList(emails);
+                setSelectedEmails(extractUsedEmailIds(emails));
             }
-        } catch (err) {
+        } catch {
             message.error('获取邮箱列表失败');
         } finally {
             setEmailLoading(false);
@@ -281,19 +296,19 @@ const ApiKeysPage: React.FC = () => {
         if (!currentApiKey) return;
         setSavingEmails(true);
         try {
-            const res: any = await apiKeyApi.updatePoolEmails(currentApiKey.id, selectedEmails);
+            const res = await apiKeyApi.updatePoolEmails(currentApiKey.id, selectedEmails);
             if (res.code === 200) {
                 message.success(`已保存，共 ${res.data.count} 个邮箱`);
                 setEmailModalVisible(false);
                 // 刷新统计
-                const statsRes: any = await apiKeyApi.getUsage(currentApiKey.id);
+                const statsRes = await apiKeyApi.getUsage(currentApiKey.id);
                 if (statsRes.code === 200) {
                     setPoolStats(statsRes.data);
                 }
             } else {
                 message.error(res.message || '保存失败');
             }
-        } catch (err) {
+        } catch {
             message.error('保存失败');
         } finally {
             setSavingEmails(false);

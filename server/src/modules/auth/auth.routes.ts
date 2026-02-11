@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { authService } from './auth.service.js';
 import { loginSchema, changePasswordSchema } from './auth.schema.js';
 
@@ -13,7 +13,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            maxAge: 7200 * 1000, // 2 hours
+            maxAge: 7200, // 2 hours (seconds)
         });
 
         return { success: true, data: result };
@@ -28,7 +28,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     // 获取当前用户
     fastify.get('/me', {
         preHandler: [fastify.authenticateJwt],
-    }, async (request, reply) => {
+    }, async (request, _reply) => {
         const admin = await authService.getMe(request.user!.id);
         return { success: true, data: admin };
     });
@@ -36,7 +36,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     // 修改密码
     fastify.post('/change-password', {
         preHandler: [fastify.authenticateJwt],
-    }, async (request, reply) => {
+    }, async (request, _reply) => {
         const input = changePasswordSchema.parse(request.body);
         await authService.changePassword(request.user!.id, input);
         return { success: true, data: { message: 'Password changed' } };

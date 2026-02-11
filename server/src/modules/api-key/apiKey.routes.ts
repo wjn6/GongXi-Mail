@@ -1,4 +1,4 @@
-import { FastifyPluginAsync } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
 import { apiKeyService } from './apiKey.service.js';
 import { poolService } from '../mail/pool.service.js';
 import { createApiKeySchema, updateApiKeySchema, listApiKeySchema } from './apiKey.schema.js';
