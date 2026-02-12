@@ -2,8 +2,38 @@ import prisma from '../../lib/prisma.js';
 import { generateApiKey } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
 import { parseApiPermissions } from '../../plugins/api-permissions.js';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import type { CreateApiKeyInput, UpdateApiKeyInput, ListApiKeyInput } from './apiKey.schema.js';
+
+function normalizeDistinctPositiveIds(ids: number[] | undefined): number[] | undefined {
+    if (!ids) {
+        return undefined;
+    }
+    const normalized = Array.from(new Set(ids.filter((id) => Number.isInteger(id) && id > 0)));
+    return normalized;
+}
+
+function parseJsonIdList(value: Prisma.JsonValue | null | undefined): number[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return Array.from(
+        new Set(
+            value
+                .map((item) => Number(item))
+                .filter((item) => Number.isInteger(item) && item > 0)
+        )
+    );
+}
+
+function toNullableJsonIds(
+    value: number[] | undefined
+): Prisma.InputJsonValue | Prisma.NullTypes.DbNull | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    return value.length > 0 ? value : Prisma.DbNull;
+}
 
 export const apiKeyService = {
     /**
@@ -62,6 +92,22 @@ export const apiKeyService = {
     async create(input: CreateApiKeyInput, createdBy: number) {
         const { name, rateLimit, expiresAt, permissions } = input;
         const normalizedPermissions = parseApiPermissions(permissions);
+        const allowedGroupIds = normalizeDistinctPositiveIds(input.allowedGroupIds);
+        const allowedEmailIds = normalizeDistinctPositiveIds(input.allowedEmailIds);
+
+        if (allowedGroupIds && allowedGroupIds.length > 0) {
+            const count = await prisma.emailGroup.count({ where: { id: { in: allowedGroupIds } } });
+            if (count !== allowedGroupIds.length) {
+                throw new AppError('GROUP_NOT_FOUND', 'Some allowed groups do not exist', 404);
+            }
+        }
+
+        if (allowedEmailIds && allowedEmailIds.length > 0) {
+            const count = await prisma.emailAccount.count({ where: { id: { in: allowedEmailIds } } });
+            if (count !== allowedEmailIds.length) {
+                throw new AppError('EMAIL_NOT_FOUND', 'Some allowed emails do not exist', 404);
+            }
+        }
 
         // 生成 API Key
         const { key, prefix, hash } = generateApiKey();
@@ -74,6 +120,8 @@ export const apiKeyService = {
                 rateLimit: rateLimit || 60,
                 expiresAt: expiresAt ? new Date(expiresAt) : null,
                 permissions: normalizedPermissions ? normalizedPermissions : undefined,
+                allowedGroupIds: toNullableJsonIds(allowedGroupIds),
+                allowedEmailIds: toNullableJsonIds(allowedEmailIds),
                 createdBy,
             },
             select: {
@@ -83,12 +131,19 @@ export const apiKeyService = {
                 rateLimit: true,
                 status: true,
                 expiresAt: true,
+                allowedGroupIds: true,
+                allowedEmailIds: true,
                 createdAt: true,
             },
         });
 
         // 返回完整 key（只在创建时返回）
-        return { ...apiKey, key };
+        return {
+            ...apiKey,
+            allowedGroupIds: parseJsonIdList(apiKey.allowedGroupIds),
+            allowedEmailIds: parseJsonIdList(apiKey.allowedEmailIds),
+            key,
+        };
     },
 
     /**
@@ -107,6 +162,8 @@ export const apiKeyService = {
                 lastUsedAt: true,
                 usageCount: true,
                 permissions: true,
+                allowedGroupIds: true,
+                allowedEmailIds: true,
                 createdAt: true,
                 updatedAt: true,
                 creator: {
@@ -122,6 +179,8 @@ export const apiKeyService = {
         return {
             ...apiKey,
             usageCount: Number(apiKey.usageCount),
+            allowedGroupIds: parseJsonIdList(apiKey.allowedGroupIds),
+            allowedEmailIds: parseJsonIdList(apiKey.allowedEmailIds),
             createdByName: apiKey.creator?.username,
         };
     },
@@ -146,6 +205,26 @@ export const apiKeyService = {
                 updateData.permissions = normalizedPermissions;
             }
         }
+        if (input.allowedGroupIds !== undefined) {
+            const allowedGroupIds = normalizeDistinctPositiveIds(input.allowedGroupIds) || [];
+            if (allowedGroupIds.length > 0) {
+                const count = await prisma.emailGroup.count({ where: { id: { in: allowedGroupIds } } });
+                if (count !== allowedGroupIds.length) {
+                    throw new AppError('GROUP_NOT_FOUND', 'Some allowed groups do not exist', 404);
+                }
+            }
+            updateData.allowedGroupIds = toNullableJsonIds(allowedGroupIds);
+        }
+        if (input.allowedEmailIds !== undefined) {
+            const allowedEmailIds = normalizeDistinctPositiveIds(input.allowedEmailIds) || [];
+            if (allowedEmailIds.length > 0) {
+                const count = await prisma.emailAccount.count({ where: { id: { in: allowedEmailIds } } });
+                if (count !== allowedEmailIds.length) {
+                    throw new AppError('EMAIL_NOT_FOUND', 'Some allowed emails do not exist', 404);
+                }
+            }
+            updateData.allowedEmailIds = toNullableJsonIds(allowedEmailIds);
+        }
 
         const apiKey = await prisma.apiKey.update({
             where: { id },
@@ -157,11 +236,17 @@ export const apiKeyService = {
                 rateLimit: true,
                 status: true,
                 expiresAt: true,
+                allowedGroupIds: true,
+                allowedEmailIds: true,
                 updatedAt: true,
             },
         });
 
-        return apiKey;
+        return {
+            ...apiKey,
+            allowedGroupIds: parseJsonIdList(apiKey.allowedGroupIds),
+            allowedEmailIds: parseJsonIdList(apiKey.allowedEmailIds),
+        };
     },
 
     /**

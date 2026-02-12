@@ -98,6 +98,7 @@ export const emailService = {
                 refreshToken: true,
                 password: true,
                 status: true,
+                groupId: true,
                 group: {
                     select: {
                         fetchStrategy: true,

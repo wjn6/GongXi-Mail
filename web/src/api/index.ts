@@ -394,15 +394,15 @@ export const apiKeyApi = {
     getById: (id: number) =>
         requestGet<Record<string, unknown>>(`/admin/api-keys/${id}`),
 
-    create: (data: { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }) =>
-        requestPost<{ key: string }, { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }>(
+    create: (data: { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null; allowedGroupIds?: number[]; allowedEmailIds?: number[] }) =>
+        requestPost<{ key: string }, { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null; allowedGroupIds?: number[]; allowedEmailIds?: number[] }>(
             '/admin/api-keys',
             data,
             { invalidatePrefixes: ['/admin/api-keys', '/admin/dashboard/stats'] }
         ),
 
-    update: (id: number, data: { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }) =>
-        requestPut<Record<string, unknown>, { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }>(
+    update: (id: number, data: { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null; allowedGroupIds?: number[]; allowedEmailIds?: number[] }) =>
+        requestPut<Record<string, unknown>, { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null; allowedGroupIds?: number[]; allowedEmailIds?: number[] }>(
             `/admin/api-keys/${id}`,
             data,
             {

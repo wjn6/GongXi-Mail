@@ -18,6 +18,8 @@ export const createApiKeySchema = z.object({
     rateLimit: z.number().min(1).max(10000).optional(),
     expiresAt: z.string().datetime().nullable().optional(),
     permissions: permissionsSchema.optional(),
+    allowedGroupIds: z.array(z.number().int().positive()).optional(),
+    allowedEmailIds: z.array(z.number().int().positive()).optional(),
 });
 
 export const updateApiKeySchema = z.object({
@@ -26,6 +28,8 @@ export const updateApiKeySchema = z.object({
     status: z.enum(['ACTIVE', 'DISABLED']).optional(),
     expiresAt: z.string().datetime().nullable().optional(),
     permissions: permissionsSchema.optional(),
+    allowedGroupIds: z.array(z.number().int().positive()).optional(),
+    allowedEmailIds: z.array(z.number().int().positive()).optional(),
 });
 
 export const listApiKeySchema = z.object({

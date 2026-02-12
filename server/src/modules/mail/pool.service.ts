@@ -3,11 +3,30 @@ import { decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
 import type { Prisma } from '@prisma/client';
 
+interface ApiKeyScope {
+    allowedGroupIds?: number[];
+    allowedEmailIds?: number[];
+}
+
 function hasErrorCode(error: unknown, code: string): boolean {
     if (!error || typeof error !== 'object') {
         return false;
     }
     return (error as { code?: unknown }).code === code;
+}
+
+function parseJsonIdList(value: Prisma.JsonValue | null | undefined): number[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return Array.from(
+        new Set(
+            value
+                .map((item) => Number(item))
+                .filter((item) => Number.isInteger(item) && item > 0)
+        )
+    );
 }
 
 /**
@@ -22,24 +41,87 @@ async function resolveGroupId(groupName?: string): Promise<number | undefined> {
     return group.id;
 }
 
+async function getApiKeyScope(apiKeyId: number): Promise<ApiKeyScope> {
+    const apiKey = await prisma.apiKey.findUnique({
+        where: { id: apiKeyId },
+        select: {
+            id: true,
+            allowedGroupIds: true,
+            allowedEmailIds: true,
+        },
+    });
+
+    if (!apiKey) {
+        throw new AppError('API_KEY_NOT_FOUND', 'API Key not found', 404);
+    }
+
+    const allowedGroupIds = parseJsonIdList(apiKey.allowedGroupIds);
+    const allowedEmailIds = parseJsonIdList(apiKey.allowedEmailIds);
+
+    return {
+        allowedGroupIds: allowedGroupIds.length > 0 ? allowedGroupIds : undefined,
+        allowedEmailIds: allowedEmailIds.length > 0 ? allowedEmailIds : undefined,
+    };
+}
+
+function isEmailInScope(scope: ApiKeyScope, emailId: number, groupId: number | null): boolean {
+    if (scope.allowedGroupIds && (!groupId || !scope.allowedGroupIds.includes(groupId))) {
+        return false;
+    }
+    if (scope.allowedEmailIds && !scope.allowedEmailIds.includes(emailId)) {
+        return false;
+    }
+    return true;
+}
+
+function applyScopeToEmailWhere(
+    where: Prisma.EmailAccountWhereInput,
+    scope: ApiKeyScope,
+    groupId?: number
+): Prisma.EmailAccountWhereInput {
+    if (groupId !== undefined) {
+        if (scope.allowedGroupIds && !scope.allowedGroupIds.includes(groupId)) {
+            throw new AppError('GROUP_FORBIDDEN', 'This API Key cannot access the selected group', 403);
+        }
+        where.groupId = groupId;
+    } else if (scope.allowedGroupIds) {
+        where.groupId = { in: scope.allowedGroupIds };
+    }
+
+    if (scope.allowedEmailIds) {
+        where.id = { in: scope.allowedEmailIds };
+    }
+
+    return where;
+}
+
 export const poolService = {
+    async getApiKeyScope(apiKeyId: number): Promise<ApiKeyScope> {
+        return getApiKeyScope(apiKeyId);
+    },
+
+    async assertEmailAccessible(apiKeyId: number, emailId: number, groupId: number | null): Promise<void> {
+        const scope = await getApiKeyScope(apiKeyId);
+        if (!isEmailInScope(scope, emailId, groupId)) {
+            throw new AppError('EMAIL_FORBIDDEN', 'This API Key cannot access this email', 403);
+        }
+    },
+
     /**
      * 获取未被该 API Key 使用过的邮箱（可按分组过滤）
      */
     async getUnusedEmail(apiKeyId: number, groupName?: string) {
+        const scope = await getApiKeyScope(apiKeyId);
         const groupId = await resolveGroupId(groupName);
 
-        const where: Prisma.EmailAccountWhereInput = {
+        const where = applyScopeToEmailWhere({
             status: 'ACTIVE',
             NOT: {
                 usages: {
                     some: { apiKeyId },
                 },
             },
-        };
-        if (groupId !== undefined) {
-            where.groupId = groupId;
-        }
+        }, scope, groupId);
 
         const email = await prisma.emailAccount.findFirst({
             where,
@@ -48,6 +130,7 @@ export const poolService = {
                 email: true,
                 clientId: true,
                 refreshToken: true,
+                groupId: true,
                 group: {
                     select: {
                         fetchStrategy: true,
@@ -132,28 +215,26 @@ export const poolService = {
      * 获取使用统计（可按分组过滤）
      */
     async getStats(apiKeyId: number, groupName?: string) {
+        const scope = await getApiKeyScope(apiKeyId);
         const groupId = await resolveGroupId(groupName);
 
-        const emailWhere: Prisma.EmailAccountWhereInput = { status: 'ACTIVE' };
-        if (groupId !== undefined) {
-            emailWhere.groupId = groupId;
-        }
+        const emailWhere = applyScopeToEmailWhere({ status: 'ACTIVE' }, scope, groupId);
 
         // 获取该分组中的邮箱 ID 集合
-        const emailIds = groupId !== undefined
-            ? (await prisma.emailAccount.findMany({
-                where: emailWhere,
-                select: { id: true },
-            })).map((e: { id: number }) => e.id)
-            : undefined;
+        const emailIds = (await prisma.emailAccount.findMany({
+            where: emailWhere,
+            select: { id: true },
+        })).map((e: { id: number }) => e.id);
 
         const usageWhere: Prisma.EmailUsageWhereInput = { apiKeyId };
-        if (emailIds) {
+        if (emailIds.length > 0) {
             usageWhere.emailAccountId = { in: emailIds };
+        } else {
+            usageWhere.emailAccountId = { in: [-1] };
         }
 
         const [total, used] = await Promise.all([
-            prisma.emailAccount.count({ where: emailWhere }),
+            Promise.resolve(emailIds.length),
             prisma.emailUsage.count({ where: usageWhere }),
         ]);
 
@@ -164,25 +245,33 @@ export const poolService = {
      * 重置使用记录（可按分组过滤）
      */
     async reset(apiKeyId: number, groupName?: string) {
+        const scope = await getApiKeyScope(apiKeyId);
         const groupId = await resolveGroupId(groupName);
+
+        const scopedEmailIds = (await prisma.emailAccount.findMany({
+            where: applyScopeToEmailWhere({ status: 'ACTIVE' }, scope, groupId),
+            select: { id: true },
+        })).map((e: { id: number }) => e.id);
+
+        if (scopedEmailIds.length === 0) {
+            return { success: true };
+        }
 
         if (groupId !== undefined) {
             // 仅重置该分组的邮箱使用记录
-            const emailIds = (await prisma.emailAccount.findMany({
-                where: { groupId, status: 'ACTIVE' },
-                select: { id: true },
-            })).map((e: { id: number }) => e.id);
-
-            if (emailIds.length > 0) {
-                await prisma.emailUsage.deleteMany({
-                    where: {
-                        apiKeyId,
-                        emailAccountId: { in: emailIds },
-                    },
-                });
-            }
+            await prisma.emailUsage.deleteMany({
+                where: {
+                    apiKeyId,
+                    emailAccountId: { in: scopedEmailIds },
+                },
+            });
         } else {
-            await prisma.emailUsage.deleteMany({ where: { apiKeyId } });
+            await prisma.emailUsage.deleteMany({
+                where: {
+                    apiKeyId,
+                    emailAccountId: { in: scopedEmailIds },
+                },
+            });
         }
 
         return { success: true };
@@ -192,10 +281,8 @@ export const poolService = {
      * 获取所有邮箱及其使用状态 (Admin 用)
      */
     async getEmailsWithUsage(apiKeyId: number, groupId?: number) {
-        const emailWhere: Prisma.EmailAccountWhereInput = { status: 'ACTIVE' };
-        if (groupId !== undefined) {
-            emailWhere.groupId = groupId;
-        }
+        const scope = await getApiKeyScope(apiKeyId);
+        const emailWhere = applyScopeToEmailWhere({ status: 'ACTIVE' }, scope, groupId);
 
         const [emails, usedIds] = await Promise.all([
             prisma.emailAccount.findMany({
@@ -225,36 +312,44 @@ export const poolService = {
      */
     async updateEmailUsage(apiKeyId: number, emailIds: number[], groupId?: number) {
         return prisma.$transaction(async (tx) => {
-            let scopedEmailIds: number[] | undefined;
-
-            if (groupId !== undefined) {
-                const group = await tx.emailGroup.findUnique({
-                    where: { id: groupId },
-                    select: { id: true },
-                });
-                if (!group) {
-                    throw new AppError('GROUP_NOT_FOUND', 'Email group not found', 404);
-                }
-
-                scopedEmailIds = (await tx.emailAccount.findMany({
-                    where: { groupId },
-                    select: { id: true },
-                })).map((item: { id: number }) => item.id);
+            const apiKey = await tx.apiKey.findUnique({
+                where: { id: apiKeyId },
+                select: {
+                    id: true,
+                    allowedGroupIds: true,
+                    allowedEmailIds: true,
+                },
+            });
+            if (!apiKey) {
+                throw new AppError('API_KEY_NOT_FOUND', 'API Key not found', 404);
             }
 
-            const scopedEmailIdSet = scopedEmailIds ? new Set(scopedEmailIds) : undefined;
-            const nextEmailIds = Array.from(
-                new Set(
-                    emailIds.filter((id: number) => !scopedEmailIdSet || scopedEmailIdSet.has(id))
-                )
-            );
+            const scope: ApiKeyScope = {
+                allowedGroupIds: parseJsonIdList(apiKey.allowedGroupIds),
+                allowedEmailIds: parseJsonIdList(apiKey.allowedEmailIds),
+            };
+            if (scope.allowedGroupIds && scope.allowedGroupIds.length === 0) scope.allowedGroupIds = undefined;
+            if (scope.allowedEmailIds && scope.allowedEmailIds.length === 0) scope.allowedEmailIds = undefined;
+
+            const scopedWhere = applyScopeToEmailWhere({ status: 'ACTIVE' }, scope, groupId);
+            const scopedEmailIds = (await tx.emailAccount.findMany({
+                where: scopedWhere,
+                select: { id: true },
+            })).map((item: { id: number }) => item.id);
+            const scopedEmailIdSet = new Set(scopedEmailIds);
+
+            const uniqueRequestedIds = Array.from(new Set(emailIds.filter((id: number) => Number.isInteger(id) && id > 0)));
+            const invalidIds = uniqueRequestedIds.filter((id: number) => !scopedEmailIdSet.has(id));
+            if (invalidIds.length > 0) {
+                throw new AppError('EMAIL_FORBIDDEN', 'Some selected emails are outside API Key scope', 403);
+            }
+
+            const nextEmailIds = uniqueRequestedIds;
 
             const existingUsages = await tx.emailUsage.findMany({
                 where: {
                     apiKeyId,
-                    ...(scopedEmailIds
-                        ? { emailAccountId: { in: scopedEmailIds } }
-                        : {}),
+                    emailAccountId: { in: scopedEmailIds },
                 },
                 select: { emailAccountId: true },
             });

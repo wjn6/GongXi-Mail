@@ -142,6 +142,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!emailAccount) {
             throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
         }
+        await poolService.assertEmailAccessible(request.apiKey.id, emailAccount.id, emailAccount.groupId ?? null);
 
         const credentials = {
             id: emailAccount.id,
@@ -228,6 +229,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             reply.code(404).type('text/plain').send('Error: Email account not found');
             return;
         }
+        await poolService.assertEmailAccessible(request.apiKey.id, emailAccount.id, emailAccount.groupId ?? null);
 
         const credentials = {
             id: emailAccount.id,
@@ -317,6 +319,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!emailAccount) {
             throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
         }
+        await poolService.assertEmailAccessible(request.apiKey.id, emailAccount.id, emailAccount.groupId ?? null);
 
         const credentials = {
             id: emailAccount.id,
@@ -384,6 +387,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!emailAccount) {
             throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
         }
+        await poolService.assertEmailAccessible(request.apiKey.id, emailAccount.id, emailAccount.groupId ?? null);
 
         const credentials = {
             id: emailAccount.id,
@@ -447,7 +451,18 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
 
             const result = await emailService.list({ page: 1, pageSize: 1000, status: 'ACTIVE', groupName });
-            const emails = result.list.map((emailItem: { email: string; status: string; group?: { name: string } | null }) => ({
+            const scope = await poolService.getApiKeyScope(request.apiKey.id);
+            const scopedEmails = result.list.filter((emailItem: { id: number; groupId: number | null }) => {
+                if (scope.allowedGroupIds && (!emailItem.groupId || !scope.allowedGroupIds.includes(emailItem.groupId))) {
+                    return false;
+                }
+                if (scope.allowedEmailIds && !scope.allowedEmailIds.includes(emailItem.id)) {
+                    return false;
+                }
+                return true;
+            });
+
+            const emails = scopedEmails.map((emailItem: { email: string; status: string; group?: { name: string } | null }) => ({
                 email: emailItem.email,
                 status: emailItem.status,
                 group: emailItem.group?.name || null,
@@ -466,7 +481,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             return {
                 success: true,
                 data: {
-                    total: result.total,
+                    total: emails.length,
                     emails: emails,
                 },
             };

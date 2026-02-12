@@ -34,7 +34,7 @@ import {
     ThunderboltOutlined,
     SearchOutlined,
 } from '@ant-design/icons';
-import { apiKeyApi, groupApi } from '../../api';
+import { apiKeyApi, groupApi, emailApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import { LOG_ACTION_OPTIONS } from '../../constants/logActions';
@@ -64,6 +64,15 @@ interface ApiKey {
 
 interface ApiKeyDetail extends ApiKey {
     permissions?: Record<string, boolean> | null;
+    allowedGroupIds?: number[] | null;
+    allowedEmailIds?: number[] | null;
+}
+
+interface EmailOptionItem {
+    id: number;
+    email: string;
+    groupId: number | null;
+    group: { id: number; name: string } | null;
 }
 
 interface PoolStats {
@@ -107,10 +116,12 @@ const ApiKeysPage: React.FC = () => {
     const [savingEmails, setSavingEmails] = useState(false);
     const [apiKeyDetailLoading, setApiKeyDetailLoading] = useState(false);
     const [groups, setGroups] = useState<EmailGroup[]>([]);
+    const [allEmailOptions, setAllEmailOptions] = useState<EmailOptionItem[]>([]);
     const [poolGroupName, setPoolGroupName] = useState<string | undefined>(undefined);
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
     const latestListRequestIdRef = useRef(0);
     const [form] = Form.useForm();
+    const selectedAllowedGroupIds = Form.useWatch('allowedGroupIds', form) as number[] | undefined;
 
     const permissionActionOptions = useMemo(
         () =>
@@ -141,6 +152,17 @@ const ApiKeysPage: React.FC = () => {
         }
     }, []);
 
+    const fetchAllEmailOptions = useCallback(async () => {
+        const result = await requestData<{ list: EmailOptionItem[]; total: number }>(
+            () => emailApi.getList<EmailOptionItem>({ page: 1, pageSize: 1000, status: 'ACTIVE' }),
+            '获取邮箱选项失败',
+            { silent: true }
+        );
+        if (result) {
+            setAllEmailOptions(result.list);
+        }
+    }, []);
+
     const fetchData = useCallback(async () => {
         const currentRequestId = ++latestListRequestIdRef.current;
         setLoading(true);
@@ -163,6 +185,10 @@ const ApiKeysPage: React.FC = () => {
     }, [fetchGroups]);
 
     useEffect(() => {
+        fetchAllEmailOptions();
+    }, [fetchAllEmailOptions]);
+
+    useEffect(() => {
         fetchData();
     }, [fetchData]);
 
@@ -172,6 +198,8 @@ const ApiKeysPage: React.FC = () => {
         form.resetFields();
         form.setFieldsValue({
             permissions: allPermissionActions,
+            allowedGroupIds: [],
+            allowedEmailIds: [],
         });
         setModalVisible(true);
     };
@@ -204,6 +232,8 @@ const ApiKeysPage: React.FC = () => {
                     status: detail.status,
                     expiresAt: detail.expiresAt ? dayjs(detail.expiresAt) : null,
                     permissions: selectedPermissions.length > 0 ? selectedPermissions : allPermissionActions,
+                    allowedGroupIds: detail.allowedGroupIds || [],
+                    allowedEmailIds: detail.allowedEmailIds || [],
                 });
             }
         } finally {
@@ -231,6 +261,12 @@ const ApiKeysPage: React.FC = () => {
             const selectedPermissions = Array.isArray(values.permissions)
                 ? values.permissions as string[]
                 : [];
+            const allowedGroupIds = Array.isArray(values.allowedGroupIds)
+                ? Array.from(new Set(values.allowedGroupIds.map((item: unknown) => Number(item)).filter((item: number) => Number.isInteger(item) && item > 0)))
+                : [];
+            const allowedEmailIds = Array.isArray(values.allowedEmailIds)
+                ? Array.from(new Set(values.allowedEmailIds.map((item: unknown) => Number(item)).filter((item: number) => Number.isInteger(item) && item > 0)))
+                : [];
             const permissions = selectedPermissions.reduce<Record<string, boolean>>((acc, action) => {
                 acc[action] = true;
                 return acc;
@@ -241,6 +277,8 @@ const ApiKeysPage: React.FC = () => {
                     ...values,
                     expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
                     permissions,
+                    allowedGroupIds,
+                    allowedEmailIds,
                 };
                 const res = await apiKeyApi.update(editingId, submitData);
                 if (res.code === 200) {
@@ -255,6 +293,8 @@ const ApiKeysPage: React.FC = () => {
                     ...values,
                     expiresAt: values.expiresAt ? values.expiresAt.toISOString() : undefined,
                     permissions,
+                    allowedGroupIds,
+                    allowedEmailIds,
                 };
                 const res = await apiKeyApi.create(submitData);
                 if (res.code === 200) {
@@ -527,6 +567,37 @@ const ApiKeysPage: React.FC = () => {
         [groups]
     );
 
+    const scopedAllowedEmailOptions = useMemo(() => {
+        const selectedGroupSet = new Set(
+            Array.isArray(selectedAllowedGroupIds)
+                ? selectedAllowedGroupIds.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0)
+                : []
+        );
+
+        const candidates = selectedGroupSet.size > 0
+            ? allEmailOptions.filter((item) => item.groupId !== null && selectedGroupSet.has(item.groupId))
+            : allEmailOptions;
+
+        return candidates.map((item) => ({
+            value: item.id,
+            label: item.group?.name ? `${item.email}（${item.group.name}）` : item.email,
+        }));
+    }, [allEmailOptions, selectedAllowedGroupIds]);
+
+    useEffect(() => {
+        const currentValue = form.getFieldValue('allowedEmailIds');
+        const selected = Array.isArray(currentValue) ? currentValue : [];
+        if (selected.length === 0) {
+            return;
+        }
+
+        const allowedSet = new Set(scopedAllowedEmailOptions.map((item) => item.value));
+        const nextSelected = selected.filter((item: number) => allowedSet.has(item));
+        if (nextSelected.length !== selected.length) {
+            form.setFieldValue('allowedEmailIds', nextSelected);
+        }
+    }, [form, scopedAllowedEmailOptions]);
+
     const filteredEmailList = useMemo(() => {
         const keyword = emailKeyword.trim().toLowerCase();
         if (!keyword) {
@@ -632,6 +703,38 @@ const ApiKeysPage: React.FC = () => {
                             style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', rowGap: 8 }}
                         />
                     </Form.Item>
+                    <Form.Item
+                        name="allowedGroupIds"
+                        label="可用分组（可选）"
+                        tooltip="不选择表示不限制分组"
+                    >
+                        <Select
+                            mode="multiple"
+                            allowClear
+                            placeholder="默认：全部分组"
+                            options={emailGroupOptions}
+                            optionFilterProp="label"
+                            maxTagCount="responsive"
+                        />
+                    </Form.Item>
+                    <Form.Item
+                        name="allowedEmailIds"
+                        label="可用邮箱（可选）"
+                        tooltip="不选择表示使用分组范围内全部邮箱"
+                    >
+                        <Select
+                            mode="multiple"
+                            allowClear
+                            showSearch
+                            placeholder="默认：分组范围内全部邮箱"
+                            options={scopedAllowedEmailOptions}
+                            optionFilterProp="label"
+                            maxTagCount="responsive"
+                        />
+                    </Form.Item>
+                    <Text type="secondary">
+                        当前可选邮箱：{scopedAllowedEmailOptions.length}
+                    </Text>
                 </Form>
                 </Spin>
             </Modal>

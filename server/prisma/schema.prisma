@@ -39,6 +39,8 @@ model ApiKey {
   keyHash     String    @unique @map("key_hash") @db.VarChar(64)
   keyPrefix   String    @map("key_prefix") @db.VarChar(8)
   permissions Json?
+  allowedGroupIds Json? @map("allowed_group_ids")
+  allowedEmailIds Json? @map("allowed_email_ids")
   rateLimit   Int       @default(60) @map("rate_limit")
   status      Status    @default(ACTIVE)
   expiresAt   DateTime? @map("expires_at")
