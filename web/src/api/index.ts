@@ -34,6 +34,11 @@ interface ApiPagedList<T> {
     total: number;
 }
 
+interface RequestGetConfig extends AxiosRequestConfig {
+    dedupe?: boolean;
+    cacheMs?: number;
+}
+
 type ApiResult<T = unknown> = Promise<ApiResponse<T>>;
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
@@ -46,8 +51,30 @@ const api = axios.create({
     },
 });
 
+const pendingGetControllers = new Map<string, AbortController>();
+const getResponseCache = new Map<string, { expiresAt: number; value: ApiResponse<unknown> }>();
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null;
+
+const stableStringify = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map(stableStringify).join(',')}]`;
+    }
+    if (typeof value === 'object') {
+        const obj = value as Record<string, unknown>;
+        return `{${Object.keys(obj).sort().map((key) => `${key}:${stableStringify(obj[key])}`).join(',')}}`;
+    }
+    return String(value);
+};
+
+const buildGetRequestKey = (url: string, config?: AxiosRequestConfig): string => {
+    const paramsKey = stableStringify(config?.params);
+    return `${url}?${paramsKey}`;
+};
 
 const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
     if (isObject(payload) && typeof payload.success === 'boolean') {
@@ -100,6 +127,13 @@ api.interceptors.response.use(
         return toApiResponse(response.data) as unknown as AxiosResponse<unknown>;
     },
     (error: AxiosError<ApiErrorPayload>) => {
+        if (error.code === 'ERR_CANCELED') {
+            return Promise.reject({
+                code: 'REQUEST_CANCELED',
+                message: 'Request canceled',
+            });
+        }
+
         if (error.response) {
             const { status, data } = error.response;
 
@@ -133,8 +167,48 @@ api.interceptors.response.use(
 
 export default api;
 
-const requestGet = <T>(url: string, config?: AxiosRequestConfig): ApiResult<T> =>
-    api.get<unknown, ApiResponse<T>>(url, config);
+const requestGet = <T>(url: string, config?: RequestGetConfig): ApiResult<T> => {
+    const { dedupe = true, cacheMs = 0, ...axiosConfig } = config || {};
+    const requestKey = buildGetRequestKey(url, axiosConfig);
+
+    if (cacheMs > 0) {
+        const cached = getResponseCache.get(requestKey);
+        if (cached && cached.expiresAt > Date.now()) {
+            return Promise.resolve(cached.value as ApiResponse<T>);
+        }
+        if (cached) {
+            getResponseCache.delete(requestKey);
+        }
+    }
+
+    let controller: AbortController | null = null;
+    if (dedupe) {
+        const previousController = pendingGetControllers.get(requestKey);
+        if (previousController) {
+            previousController.abort();
+        }
+        controller = new AbortController();
+        pendingGetControllers.set(requestKey, controller);
+        axiosConfig.signal = controller.signal;
+    }
+
+    return api
+        .get<unknown, ApiResponse<T>>(url, axiosConfig)
+        .then((response) => {
+            if (cacheMs > 0) {
+                getResponseCache.set(requestKey, {
+                    expiresAt: Date.now() + cacheMs,
+                    value: response as ApiResponse<unknown>,
+                });
+            }
+            return response;
+        })
+        .finally(() => {
+            if (controller && pendingGetControllers.get(requestKey) === controller) {
+                pendingGetControllers.delete(requestKey);
+            }
+        });
+};
 
 const requestPost = <TResponse, TBody = unknown>(
     url: string,
@@ -208,7 +282,7 @@ export const adminApi = {
 
 export const apiKeyApi = {
     getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) =>
-        requestGet<ApiPagedList<T>>('/admin/api-keys', { params }),
+        requestGet<ApiPagedList<T>>('/admin/api-keys', { params, cacheMs: 800 }),
 
     getById: (id: number) =>
         requestGet<Record<string, unknown>>(`/admin/api-keys/${id}`),
@@ -231,6 +305,7 @@ export const apiKeyApi = {
     getUsage: (id: number, groupName?: string) =>
         requestGet<{ total: number; used: number; remaining: number }>(`/admin/api-keys/${id}/usage`, {
             params: { group: groupName },
+            cacheMs: 1000,
         }),
 
     resetPool: (id: number, groupName?: string) =>
@@ -239,7 +314,7 @@ export const apiKeyApi = {
         }),
 
     getPoolEmails: <T = Record<string, unknown>>(id: number, groupId?: number) =>
-        requestGet<T[]>(`/admin/api-keys/${id}/pool-emails`, { params: { groupId } }),
+        requestGet<T[]>(`/admin/api-keys/${id}/pool-emails`, { params: { groupId }, cacheMs: 800 }),
 
     updatePoolEmails: (id: number, emailIds: number[]) =>
         requestPut<{ count: number }, { emailIds: number[] }>(`/admin/api-keys/${id}/pool-emails`, {
@@ -253,7 +328,7 @@ export const apiKeyApi = {
 
 export const emailApi = {
     getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string; groupId?: number }) =>
-        requestGet<ApiPagedList<T>>('/admin/emails', { params }),
+        requestGet<ApiPagedList<T>>('/admin/emails', { params, cacheMs: 800 }),
 
     getById: <T = Record<string, unknown>>(id: number, includeSecrets?: boolean) =>
         requestGet<T>(`/admin/emails/${id}`, { params: { secrets: includeSecrets } }),
@@ -304,7 +379,7 @@ export const emailApi = {
 
 export const groupApi = {
     getList: <T = Record<string, unknown>>() =>
-        requestGet<T[]>('/admin/email-groups'),
+        requestGet<T[]>('/admin/email-groups', { cacheMs: 5000 }),
 
     getById: (id: number) =>
         requestGet<Record<string, unknown>>(`/admin/email-groups/${id}`),
@@ -341,10 +416,10 @@ export const groupApi = {
 
 export const dashboardApi = {
     getStats: <T = Record<string, unknown>>() =>
-        requestGet<T>('/admin/dashboard/stats'),
+        requestGet<T>('/admin/dashboard/stats', { cacheMs: 2000 }),
 
     getApiTrend: <T = Record<string, unknown>>(days: number = 7) =>
-        requestGet<T[]>('/admin/dashboard/api-trend', { params: { days } }),
+        requestGet<T[]>('/admin/dashboard/api-trend', { params: { days }, cacheMs: 2000 }),
 
     getLogs: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; action?: string }) =>
         requestGet<ApiPagedList<T>>('/admin/dashboard/logs', { params }),

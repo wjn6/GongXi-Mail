@@ -23,6 +23,13 @@ export async function requestData<T>(
         }
         return null;
     } catch (err: unknown) {
+        if (
+            err &&
+            typeof err === 'object' &&
+            (err as { code?: unknown }).code === 'REQUEST_CANCELED'
+        ) {
+            return null;
+        }
         if (!options?.silent) {
             message.error(getErrorMessage(err, fallbackErrorMessage));
         }
