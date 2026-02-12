@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Row, Col, Card, Table, Tag, Typography, Spin } from 'antd';
 import { Link } from 'react-router-dom';
 import {
@@ -60,10 +60,13 @@ const DashboardPage: React.FC = () => {
     const [coreLoading, setCoreLoading] = useState(true);
     const [trendLoading, setTrendLoading] = useState(true);
     const [chartsReady, setChartsReady] = useState(false);
+    const [chartsInView, setChartsInView] = useState(false);
+    const [trendRequested, setTrendRequested] = useState(false);
     const [stats, setStats] = useState<Stats | null>(null);
     const [recentEmails, setRecentEmails] = useState<DashboardEmailItem[]>([]);
     const [recentApiKeys, setRecentApiKeys] = useState<DashboardApiKeyItem[]>([]);
     const [apiTrend, setApiTrend] = useState<ApiTrendItem[]>([]);
+    const chartsSectionRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         let disposed = false;
@@ -102,34 +105,17 @@ const DashboardPage: React.FC = () => {
             }
         };
 
-        const loadTrend = async () => {
-            try {
-                const trendRes = await dashboardApi.getApiTrend<ApiTrendItem>(7);
-                if (!disposed && trendRes.code === 200) {
-                    setApiTrend(trendRes.data);
-                }
-            } catch (err) {
-                console.error('Failed to fetch dashboard trend:', err);
-            } finally {
-                if (!disposed) {
-                    setTrendLoading(false);
-                }
-            }
-        };
-
         void loadCore();
 
         if (typeof idleWindow.requestIdleCallback === 'function') {
             idleId = idleWindow.requestIdleCallback(() => {
                 if (disposed) return;
                 setChartsReady(true);
-                void loadTrend();
             }, { timeout: 1200 });
         } else {
             timerId = window.setTimeout(() => {
                 if (disposed) return;
                 setChartsReady(true);
-                void loadTrend();
             }, 350);
         }
 
@@ -143,6 +129,54 @@ const DashboardPage: React.FC = () => {
             }
         };
     }, []);
+
+    useEffect(() => {
+        const target = chartsSectionRef.current;
+        if (!target) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) {
+                    setChartsInView(true);
+                    observer.disconnect();
+                }
+            },
+            { rootMargin: '120px 0px' }
+        );
+
+        observer.observe(target);
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+        if (!chartsReady || !chartsInView || trendRequested) {
+            return;
+        }
+        setTrendRequested(true);
+        let cancelled = false;
+
+        const loadTrend = async () => {
+            try {
+                const trendRes = await dashboardApi.getApiTrend<ApiTrendItem>(7);
+                if (!cancelled && trendRes.code === 200) {
+                    setApiTrend(trendRes.data);
+                }
+            } catch (err) {
+                console.error('Failed to fetch dashboard trend:', err);
+            } finally {
+                if (!cancelled) {
+                    setTrendLoading(false);
+                }
+            }
+        };
+
+        void loadTrend();
+        return () => {
+            cancelled = true;
+        };
+    }, [chartsInView, chartsReady, trendRequested]);
 
     const emailColumns = [
         {
@@ -294,10 +328,10 @@ const DashboardPage: React.FC = () => {
             </Row>
 
             {/* 图表区域 */}
-            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+            <Row gutter={[16, 16]} style={{ marginTop: 16 }} ref={chartsSectionRef}>
                 <Col xs={24} md={16}>
                     <Card title="API 调用趋势（近7天）" bordered={false}>
-                        {!chartsReady || trendLoading ? (
+                        {!chartsReady || !chartsInView || trendLoading ? (
                             <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
                         ) : (
                             <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
@@ -308,7 +342,7 @@ const DashboardPage: React.FC = () => {
                 </Col>
                 <Col xs={24} md={8}>
                     <Card title="邮箱状态分布" bordered={false}>
-                        {coreLoading ? (
+                        {coreLoading || !chartsReady || !chartsInView ? (
                             <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
                         ) : pieData.length > 0 ? (
                             <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>

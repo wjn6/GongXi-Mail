@@ -10,6 +10,7 @@ import { env } from './config/env.js';
 import errorPlugin from './plugins/error.js';
 import authPlugin from './plugins/auth.js';
 import { isApiOrAdminPath, shouldServeSpaIndex } from './lib/http.js';
+import { ensurePrecompressedAssets } from './lib/static-compression.js';
 
 // Routes
 import authRoutes from './modules/auth/auth.routes.js';
@@ -67,10 +68,24 @@ export async function buildApp() {
     });
 
     // 静态文件（前端）- 禁用 fastify-static 的默认 404 处理
+    const staticRoot = join(__dirname, '../../public');
+    if (env.NODE_ENV === 'production') {
+        try {
+            const compressionResult = await ensurePrecompressedAssets(staticRoot);
+            fastify.log.info({
+                staticFiles: compressionResult.files,
+                generatedCompressedFiles: compressionResult.generated,
+            }, 'Static precompression ready');
+        } catch (err) {
+            fastify.log.warn({ err }, 'Failed to precompress static assets');
+        }
+    }
+
     await fastify.register(fastifyStatic, {
-        root: join(__dirname, '../../public'),
+        root: staticRoot,
         prefix: '/',
         wildcard: false, // 禁用通配符，让我们自定义处理 SPA
+        preCompressed: true,
     });
 
     // API 路由

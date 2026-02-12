@@ -173,6 +173,7 @@ API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`�
 - 不要在 `docker-compose.yml`、`.env`、代码仓库中写死生产密钥。
 - `server/.env.example` 仅作为模板，不能直接用于生产。
 - 如需跨域访问，配置 `CORS_ORIGIN`（如 `https://admin.example.com,https://ops.example.com`）。
+- 生产模式会在启动时对前端静态资源生成 `.gz/.br` 预压缩文件，并优先下发压缩版本。
 
 ## License
 
