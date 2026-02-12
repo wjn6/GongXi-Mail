@@ -31,9 +31,17 @@ export async function buildApp() {
         } : true,
     });
 
+    const parsedCorsOrigins = (env.CORS_ORIGIN || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean);
+    const corsOrigin = parsedCorsOrigins.length > 0
+        ? parsedCorsOrigins
+        : env.NODE_ENV === 'development';
+
     // 插件
     await fastify.register(fastifyCors, {
-        origin: true,
+        origin: corsOrigin,
         credentials: true,
     });
 
@@ -83,7 +91,7 @@ export async function buildApp() {
         const isApiPath = path === '/api' || path.startsWith('/api/');
         const isAdminPath = path === '/admin' || path.startsWith('/admin/');
         const isAssetPath = /\.[^/]+$/.test(path);
-        const wantsHtml = accept.includes('text/html');
+        const wantsJson = accept.includes('application/json');
 
         // 如果是 API 路由，返回 404 JSON
         if (isApiPath || isAdminPath) {
@@ -94,7 +102,7 @@ export async function buildApp() {
         }
 
         // 非页面请求或静态资源不存在，返回 404 JSON
-        if (!['GET', 'HEAD'].includes(method) || isAssetPath || !wantsHtml) {
+        if (!['GET', 'HEAD'].includes(method) || isAssetPath || wantsJson) {
             return reply.status(404).send({
                 success: false,
                 error: { code: 'NOT_FOUND', message: 'Route not found' },

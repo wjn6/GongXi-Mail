@@ -308,7 +308,7 @@ const ApiKeysPage: React.FC = () => {
         if (!currentApiKey) return;
         setSavingEmails(true);
         try {
-            const res = await apiKeyApi.updatePoolEmails(currentApiKey.id, selectedEmails);
+            const res = await apiKeyApi.updatePoolEmails(currentApiKey.id, selectedEmails, emailGroupId);
             if (res.code === 200) {
                 message.success(`已保存，共 ${res.data.count} 个邮箱`);
                 setEmailModalVisible(false);

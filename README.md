@@ -75,11 +75,12 @@ npm run build
 | PORT | 端口 | 3000 |
 | DATABASE_URL | PostgreSQL 连接 | - |
 | REDIS_URL | Redis 连接 | - |
+| CORS_ORIGIN | 允许跨域来源（逗号分隔） | 开发环境默认放开 |
 | JWT_SECRET | JWT 密钥 (≥32字符) | - |
 | JWT_EXPIRES_IN | Token 过期时间 | 2h |
 | ENCRYPTION_KEY | 加密密钥 (32字符) | - |
 | ADMIN_USERNAME | 默认管理员用户名 | admin |
-| ADMIN_PASSWORD | 默认管理员密码（生产必须覆盖） | - |
+| ADMIN_PASSWORD | 默认管理员密码（生产禁止使用默认值） | - |
 
 ## 枚举约定
 
@@ -165,6 +166,7 @@ npm run build
 - `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 必须通过外部环境变量注入。
 - 不要在 `docker-compose.yml`、`.env`、代码仓库中写死生产密钥。
 - `server/.env.example` 仅作为模板，不能直接用于生产。
+- 如需跨域访问，配置 `CORS_ORIGIN`（如 `https://admin.example.com,https://ops.example.com`）。
 
 ## License
 

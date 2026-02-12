@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Row, Col, Card, Table, Tag, Typography, Spin } from 'antd';
+import { Link } from 'react-router-dom';
 import {
     MailOutlined,
     KeyOutlined,
@@ -277,7 +278,7 @@ const DashboardPage: React.FC = () => {
                         title="最近添加的邮箱"
                         bordered={false}
                         bodyStyle={{ padding: 0 }}
-                        extra={<a href="/emails">查看全部</a>}
+                        extra={<Link to="/emails">查看全部</Link>}
                     >
                         <Table
                             dataSource={recentEmails}
@@ -294,7 +295,7 @@ const DashboardPage: React.FC = () => {
                         title="API Key 使用排行"
                         bordered={false}
                         bodyStyle={{ padding: 0 }}
-                        extra={<a href="/api-keys">查看全部</a>}
+                        extra={<Link to="/api-keys">查看全部</Link>}
                     >
                         <Table
                             dataSource={recentApiKeys}

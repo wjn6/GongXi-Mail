@@ -217,12 +217,52 @@ export const poolService = {
     /**
      * 更新邮箱使用状态 (Admin 用)
      */
-    async updateEmailUsage(apiKeyId: number, emailIds: number[]) {
+    async updateEmailUsage(apiKeyId: number, emailIds: number[], groupId?: number) {
+        if (groupId !== undefined) {
+            const group = await prisma.emailGroup.findUnique({
+                where: { id: groupId },
+                select: { id: true },
+            });
+            if (!group) {
+                throw new AppError('GROUP_NOT_FOUND', 'Email group not found', 404);
+            }
+
+            const scopedEmailIds = (await prisma.emailAccount.findMany({
+                where: { groupId },
+                select: { id: true },
+            })).map((item: { id: number }) => item.id);
+
+            const scopedEmailIdSet = new Set(scopedEmailIds);
+            const nextEmailIds = Array.from(
+                new Set(emailIds.filter((id: number) => scopedEmailIdSet.has(id)))
+            );
+
+            await prisma.emailUsage.deleteMany({
+                where: {
+                    apiKeyId,
+                    emailAccountId: { in: scopedEmailIds },
+                },
+            });
+
+            if (nextEmailIds.length > 0) {
+                await prisma.emailUsage.createMany({
+                    data: nextEmailIds.map((emailAccountId: number) => ({
+                        apiKeyId,
+                        emailAccountId,
+                    })),
+                    skipDuplicates: true,
+                });
+            }
+
+            return { success: true, count: nextEmailIds.length };
+        }
+
+        const nextEmailIds = Array.from(new Set(emailIds));
         await prisma.emailUsage.deleteMany({ where: { apiKeyId } });
 
-        if (emailIds.length > 0) {
+        if (nextEmailIds.length > 0) {
             await prisma.emailUsage.createMany({
-                data: emailIds.map((emailAccountId: number) => ({
+                data: nextEmailIds.map((emailAccountId: number) => ({
                     apiKeyId,
                     emailAccountId,
                 })),
@@ -230,6 +270,6 @@ export const poolService = {
             });
         }
 
-        return { success: true, count: emailIds.length };
+        return { success: true, count: nextEmailIds.length };
     },
 };

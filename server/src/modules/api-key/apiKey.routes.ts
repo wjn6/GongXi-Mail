@@ -2,6 +2,7 @@ import { type FastifyPluginAsync } from 'fastify';
 import { apiKeyService } from './apiKey.service.js';
 import { poolService } from '../mail/pool.service.js';
 import { createApiKeySchema, updateApiKeySchema, listApiKeySchema } from './apiKey.schema.js';
+import { z } from 'zod';
 
 const apiKeyRoutes: FastifyPluginAsync = async (fastify) => {
     // 所有路由需要 JWT 认证
@@ -71,8 +72,11 @@ const apiKeyRoutes: FastifyPluginAsync = async (fastify) => {
     // 更新邮箱使用状态
     fastify.put('/:id/pool-emails', async (request) => {
         const { id } = request.params as { id: string };
-        const { emailIds } = request.body as { emailIds: number[] };
-        const result = await poolService.updateEmailUsage(parseInt(id), emailIds || []);
+        const input = z.object({
+            emailIds: z.array(z.number().int().positive()).default([]),
+            groupId: z.number().int().positive().optional(),
+        }).parse(request.body);
+        const result = await poolService.updateEmailUsage(parseInt(id), input.emailIds, input.groupId);
         return { success: true, data: result };
     });
 };

@@ -26,6 +26,10 @@ interface ApiErrorPayload {
     error?: {
         code?: string | number;
         message?: string;
+        details?: Array<{
+            path?: Array<string | number>;
+            message?: string;
+        }>;
     };
 }
 
@@ -97,6 +101,34 @@ const invalidateGetCache = (prefixes?: string[]) => {
             pendingGetControllers.delete(key);
         }
     }
+};
+
+const formatApiErrorMessage = (fallbackMessage: string, payload?: ApiErrorPayload): string => {
+    const baseMessage = payload?.error?.message || payload?.message || fallbackMessage;
+    const details = payload?.error?.details;
+
+    if (!Array.isArray(details) || details.length === 0) {
+        return baseMessage;
+    }
+
+    const detailMessage = details
+        .slice(0, 3)
+        .map((detail) => {
+            const path = Array.isArray(detail?.path) ? detail.path.map(String).join('.') : '';
+            const message = typeof detail?.message === 'string' ? detail.message : '';
+            if (path && message) {
+                return `${path}: ${message}`;
+            }
+            return message || path;
+        })
+        .filter(Boolean)
+        .join('; ');
+
+    if (!detailMessage) {
+        return baseMessage;
+    }
+
+    return `${baseMessage}: ${detailMessage}`;
 };
 
 const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
@@ -171,13 +203,14 @@ api.interceptors.response.use(
             if (data?.error) {
                 return Promise.reject({
                     code: data.error.code || status,
-                    message: data.error.message || 'Request failed',
+                    message: formatApiErrorMessage('Request failed', data),
+                    details: data.error.details,
                 });
             }
 
             return Promise.reject({
                 code: status,
-                message: data?.message || 'Request failed',
+                message: formatApiErrorMessage('Request failed', data),
             });
         }
 
@@ -364,9 +397,10 @@ export const apiKeyApi = {
     getPoolEmails: <T = Record<string, unknown>>(id: number, groupId?: number) =>
         requestGet<T[]>(`/admin/api-keys/${id}/pool-emails`, { params: { groupId }, cacheMs: 800 }),
 
-    updatePoolEmails: (id: number, emailIds: number[]) =>
-        requestPut<{ count: number }, { emailIds: number[] }>(`/admin/api-keys/${id}/pool-emails`, {
+    updatePoolEmails: (id: number, emailIds: number[], groupId?: number) =>
+        requestPut<{ count: number }, { emailIds: number[]; groupId?: number }>(`/admin/api-keys/${id}/pool-emails`, {
             emailIds,
+            groupId,
         }, { invalidatePrefixes: [`/admin/api-keys/${id}/usage`, `/admin/api-keys/${id}/pool-emails`] }),
 };
 

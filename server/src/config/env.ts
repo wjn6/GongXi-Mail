@@ -10,6 +10,7 @@ const envSchema = z.object({
 
     // Redis (optional)
     REDIS_URL: z.string().optional(),
+    CORS_ORIGIN: z.string().optional(),
 
     // JWT
     JWT_SECRET: z.string().min(32),
@@ -31,6 +32,17 @@ function loadEnv(): Env {
     if (!result.success) {
         console.error('❌ Invalid environment variables:');
         console.error(result.error.format());
+        process.exit(1);
+    }
+
+    if (result.data.NODE_ENV === 'production' && result.data.ADMIN_PASSWORD === 'admin123') {
+        console.error('❌ Invalid environment variables:');
+        console.error({
+            _errors: [],
+            ADMIN_PASSWORD: {
+                _errors: ['Production ADMIN_PASSWORD cannot use default value'],
+            },
+        });
         process.exit(1);
     }
 
