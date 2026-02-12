@@ -444,6 +444,24 @@ const ApiKeysPage: React.FC = () => {
         [page, pageSize, total]
     );
 
+    const poolGroupOptions = useMemo(
+        () =>
+            groups.map((group: EmailGroup) => ({
+                value: group.name,
+                label: `${group.name} (${group.emailCount})`,
+            })),
+        [groups]
+    );
+
+    const emailGroupOptions = useMemo(
+        () =>
+            groups.map((group: EmailGroup) => ({
+                value: group.id,
+                label: group.name,
+            })),
+        [groups]
+    );
+
     return (
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -576,12 +594,9 @@ const ApiKeysPage: React.FC = () => {
                                 placeholder="全部分组"
                                 style={{ width: 200 }}
                                 value={poolGroupName}
+                                options={poolGroupOptions}
                                 onChange={(val: string | undefined) => handlePoolGroupChange(val)}
-                            >
-                                {groups.map((g: EmailGroup) => (
-                                    <Select.Option key={g.id} value={g.name}>{g.name} ({g.emailCount})</Select.Option>
-                                ))}
-                            </Select>
+                            />
                         </div>
                         <Row gutter={16} style={{ marginBottom: 24 }}>
                             <Col span={8}>
@@ -689,12 +704,9 @@ const ApiKeysPage: React.FC = () => {
                                     placeholder="全部分组"
                                     style={{ width: 180 }}
                                     value={emailGroupId}
+                                    options={emailGroupOptions}
                                     onChange={(val: number | undefined) => handleEmailGroupChange(val)}
-                                >
-                                    {groups.map((g: EmailGroup) => (
-                                        <Select.Option key={g.id} value={g.id}>{g.name}</Select.Option>
-                                    ))}
-                                </Select>
+                                />
                             </Space>
                         </div>
                         <div style={{ marginBottom: 16 }}>

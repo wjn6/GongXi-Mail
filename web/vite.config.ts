@@ -20,5 +20,26 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) {
+            return
+          }
+          if (id.includes('react') || id.includes('scheduler')) {
+            return 'react-vendor'
+          }
+          if (id.includes('antd') || id.includes('@ant-design')) {
+            return 'antd-vendor'
+          }
+          if (id.includes('react-router-dom') || id.includes('react-router')) {
+            return 'router-vendor'
+          }
+          if (id.includes('axios') || id.includes('zustand') || id.includes('dayjs')) {
+            return 'utils-vendor'
+          }
+        },
+      },
+    },
   },
 })

@@ -622,6 +622,24 @@ const EmailsPage: React.FC = () => {
         [emailDetailContent]
     );
 
+    const groupFilterOptions = useMemo(
+        () =>
+            groups.map((group: EmailGroup) => ({
+                value: group.id,
+                label: `${group.name} (${group.emailCount})`,
+            })),
+        [groups]
+    );
+
+    const groupOptions = useMemo(
+        () =>
+            groups.map((group: EmailGroup) => ({
+                value: group.id,
+                label: group.name,
+            })),
+        [groups]
+    );
+
     // ========================================
     // Group table columns
     // ========================================
@@ -704,15 +722,12 @@ const EmailsPage: React.FC = () => {
                                             allowClear
                                             style={{ width: 160 }}
                                             value={filterGroupId}
+                                            options={groupFilterOptions}
                                             onChange={(val: number | string | undefined) => {
                                                 setFilterGroupId(toOptionalNumber(val));
                                                 setPage(1);
                                             }}
-                                        >
-                                            {groups.map((g: EmailGroup) => (
-                                                <Select.Option key={g.id} value={g.id}>{g.name} ({g.emailCount})</Select.Option>
-                                            ))}
-                                        </Select>
+                                        />
                                     </Space>
                                     <Space wrap>
                                         <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)}>
@@ -809,13 +824,7 @@ const EmailsPage: React.FC = () => {
                         <TextArea rows={4} placeholder="OAuth2 Refresh Token" />
                     </Form.Item>
                     <Form.Item name="groupId" label="所属分组">
-                        <Select placeholder="可选：选择分组" allowClear>
-                            {groups.map((group: EmailGroup) => (
-                                <Select.Option key={group.id} value={group.id}>
-                                    {group.name}
-                                </Select.Option>
-                            ))}
-                        </Select>
+                        <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
                     </Form.Item>
                     <Form.Item name="status" label="状态" initialValue="ACTIVE">
                         <Select>
@@ -854,15 +863,10 @@ const EmailsPage: React.FC = () => {
                         placeholder="导入到分组（可选）"
                         allowClear
                         value={importGroupId}
+                        options={groupOptions}
                         onChange={(value: number | string | undefined) => setImportGroupId(toOptionalNumber(value))}
                         style={{ width: 260 }}
-                    >
-                        {groups.map((group: EmailGroup) => (
-                            <Select.Option key={group.id} value={group.id}>
-                                {group.name}
-                            </Select.Option>
-                        ))}
-                    </Select>
+                    />
                     <Dragger
                         beforeUpload={(file) => {
                             const reader = new FileReader();
@@ -1037,12 +1041,9 @@ const EmailsPage: React.FC = () => {
                     placeholder="选择目标分组"
                     style={{ width: '100%' }}
                     value={assignTargetGroupId}
+                    options={groupOptions}
                     onChange={setAssignTargetGroupId}
-                >
-                    {groups.map((g: EmailGroup) => (
-                        <Select.Option key={g.id} value={g.id}>{g.name}</Select.Option>
-                    ))}
-                </Select>
+                />
             </Modal>
         </div>
     );
