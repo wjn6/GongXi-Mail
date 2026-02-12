@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Table,
     Button,
@@ -101,6 +101,7 @@ const ApiKeysPage: React.FC = () => {
     const [groups, setGroups] = useState<EmailGroup[]>([]);
     const [poolGroupName, setPoolGroupName] = useState<string | undefined>(undefined);
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
+    const latestListRequestIdRef = useRef(0);
     const [form] = Form.useForm();
 
     const extractUsedEmailIds = useCallback(
@@ -120,11 +121,15 @@ const ApiKeysPage: React.FC = () => {
     }, []);
 
     const fetchData = useCallback(async () => {
+        const currentRequestId = ++latestListRequestIdRef.current;
         setLoading(true);
         const result = await requestData<ApiKeyListResult>(
             () => apiKeyApi.getList({ page, pageSize }),
             '获取数据失败'
         );
+        if (currentRequestId !== latestListRequestIdRef.current) {
+            return;
+        }
         if (result) {
             setData(result.list);
             setTotal(result.total);

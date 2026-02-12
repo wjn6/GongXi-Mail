@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Table,
     Button,
@@ -112,6 +112,7 @@ const EmailsPage: React.FC = () => {
     const [groupForm] = Form.useForm();
     const [assignGroupModalVisible, setAssignGroupModalVisible] = useState(false);
     const [assignTargetGroupId, setAssignTargetGroupId] = useState<number | undefined>(undefined);
+    const latestListRequestIdRef = useRef(0);
 
     const toOptionalNumber = (value: unknown): number | undefined => {
         if (value === undefined || value === null || value === '') {
@@ -133,6 +134,7 @@ const EmailsPage: React.FC = () => {
     }, []);
 
     const fetchData = useCallback(async () => {
+        const currentRequestId = ++latestListRequestIdRef.current;
         setLoading(true);
         const params: { page: number; pageSize: number; keyword: string; groupId?: number } = { page, pageSize, keyword: debouncedKeyword };
         if (filterGroupId !== undefined) params.groupId = filterGroupId;
@@ -141,6 +143,9 @@ const EmailsPage: React.FC = () => {
             () => emailApi.getList(params),
             '获取数据失败'
         );
+        if (currentRequestId !== latestListRequestIdRef.current) {
+            return;
+        }
         if (result) {
             setData(result.list);
             setTotal(result.total);
