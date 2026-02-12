@@ -57,43 +57,92 @@ interface ApiTrendItem {
 }
 
 const DashboardPage: React.FC = () => {
-    const [loading, setLoading] = useState(true);
+    const [coreLoading, setCoreLoading] = useState(true);
+    const [trendLoading, setTrendLoading] = useState(true);
+    const [chartsReady, setChartsReady] = useState(false);
     const [stats, setStats] = useState<Stats | null>(null);
     const [recentEmails, setRecentEmails] = useState<DashboardEmailItem[]>([]);
     const [recentApiKeys, setRecentApiKeys] = useState<DashboardApiKeyItem[]>([]);
     const [apiTrend, setApiTrend] = useState<ApiTrendItem[]>([]);
 
     useEffect(() => {
-        fetchData();
-    }, []);
+        let disposed = false;
+        let idleId: number | null = null;
+        let timerId: number | null = null;
+        const idleWindow = window as Window & {
+            requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+            cancelIdleCallback?: (handle: number) => void;
+        };
 
-    const fetchData = async () => {
-        try {
-            const [statsRes, emailsRes, apiKeysRes, trendRes] = await Promise.all([
-                dashboardApi.getStats<Stats>(),
-                emailApi.getList<DashboardEmailItem>({ page: 1, pageSize: 5 }),
-                apiKeyApi.getList<DashboardApiKeyItem>({ page: 1, pageSize: 5 }),
-                dashboardApi.getApiTrend<ApiTrendItem>(7),
-            ]);
+        const loadCore = async () => {
+            try {
+                const [statsRes, emailsRes, apiKeysRes] = await Promise.all([
+                    dashboardApi.getStats<Stats>(),
+                    emailApi.getList<DashboardEmailItem>({ page: 1, pageSize: 5 }),
+                    apiKeyApi.getList<DashboardApiKeyItem>({ page: 1, pageSize: 5 }),
+                ]);
 
-            if (statsRes.code === 200) {
-                setStats(statsRes.data);
+                if (disposed) return;
+
+                if (statsRes.code === 200) {
+                    setStats(statsRes.data);
+                }
+                if (emailsRes.code === 200) {
+                    setRecentEmails(emailsRes.data.list);
+                }
+                if (apiKeysRes.code === 200) {
+                    setRecentApiKeys(apiKeysRes.data.list);
+                }
+            } catch (err) {
+                console.error('Failed to fetch core dashboard data:', err);
+            } finally {
+                if (!disposed) {
+                    setCoreLoading(false);
+                }
             }
-            if (emailsRes.code === 200) {
-                setRecentEmails(emailsRes.data.list);
+        };
+
+        const loadTrend = async () => {
+            try {
+                const trendRes = await dashboardApi.getApiTrend<ApiTrendItem>(7);
+                if (!disposed && trendRes.code === 200) {
+                    setApiTrend(trendRes.data);
+                }
+            } catch (err) {
+                console.error('Failed to fetch dashboard trend:', err);
+            } finally {
+                if (!disposed) {
+                    setTrendLoading(false);
+                }
             }
-            if (apiKeysRes.code === 200) {
-                setRecentApiKeys(apiKeysRes.data.list);
-            }
-            if (trendRes.code === 200) {
-                setApiTrend(trendRes.data);
-            }
-        } catch (err) {
-            console.error('Failed to fetch data:', err);
-        } finally {
-            setLoading(false);
+        };
+
+        void loadCore();
+
+        if (typeof idleWindow.requestIdleCallback === 'function') {
+            idleId = idleWindow.requestIdleCallback(() => {
+                if (disposed) return;
+                setChartsReady(true);
+                void loadTrend();
+            }, { timeout: 1200 });
+        } else {
+            timerId = window.setTimeout(() => {
+                if (disposed) return;
+                setChartsReady(true);
+                void loadTrend();
+            }, 350);
         }
-    };
+
+        return () => {
+            disposed = true;
+            if (idleId !== null && typeof idleWindow.cancelIdleCallback === 'function') {
+                idleWindow.cancelIdleCallback(idleId);
+            }
+            if (timerId !== null) {
+                window.clearTimeout(timerId);
+            }
+        };
+    }, []);
 
     const emailColumns = [
         {
@@ -197,13 +246,10 @@ const DashboardPage: React.FC = () => {
         },
     }), [pieData, stats]);
 
-    if (loading) {
-        return (
-            <div style={{ textAlign: 'center', padding: 100 }}>
-                <Spin size="large" />
-            </div>
-        );
-    }
+    const statsData: Stats = stats || {
+        apiKeys: { total: 0, active: 0, totalUsage: 0, todayActive: 0 },
+        emails: { total: 0, active: 0, error: 0 },
+    };
 
     return (
         <div>
@@ -214,7 +260,7 @@ const DashboardPage: React.FC = () => {
                 <Col xs={12} sm={12} md={6}>
                     <StatCard
                         title="邮箱总数"
-                        value={stats?.emails.total || 0}
+                        value={statsData.emails.total}
                         icon={<MailOutlined />}
                         iconBgColor="#1890ff"
                     />
@@ -222,16 +268,16 @@ const DashboardPage: React.FC = () => {
                 <Col xs={12} sm={12} md={6}>
                     <StatCard
                         title="正常邮箱"
-                        value={stats?.emails.active || 0}
+                        value={statsData.emails.active}
                         icon={<CheckCircleOutlined />}
                         iconBgColor="#52c41a"
-                        suffix={`/ ${stats?.emails.total || 0}`}
+                        suffix={`/ ${statsData.emails.total}`}
                     />
                 </Col>
                 <Col xs={12} sm={12} md={6}>
                     <StatCard
                         title="API 调用总数"
-                        value={stats?.apiKeys.totalUsage || 0}
+                        value={statsData.apiKeys.totalUsage}
                         icon={<ApiOutlined />}
                         iconBgColor="#722ed1"
                     />
@@ -239,10 +285,10 @@ const DashboardPage: React.FC = () => {
                 <Col xs={12} sm={12} md={6}>
                     <StatCard
                         title="活跃 API Key"
-                        value={stats?.apiKeys.active || 0}
+                        value={statsData.apiKeys.active}
                         icon={<KeyOutlined />}
                         iconBgColor="#fa8c16"
-                        suffix={`/ ${stats?.apiKeys.total || 0}`}
+                        suffix={`/ ${statsData.apiKeys.total}`}
                     />
                 </Col>
             </Row>
@@ -251,14 +297,20 @@ const DashboardPage: React.FC = () => {
             <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                 <Col xs={24} md={16}>
                     <Card title="API 调用趋势（近7天）" bordered={false}>
-                        <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
-                            <LineChart {...lineConfig} />
-                        </Suspense>
+                        {!chartsReady || trendLoading ? (
+                            <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
+                        ) : (
+                            <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
+                                <LineChart {...lineConfig} />
+                            </Suspense>
+                        )}
                     </Card>
                 </Col>
                 <Col xs={24} md={8}>
                     <Card title="邮箱状态分布" bordered={false}>
-                        {pieData.length > 0 ? (
+                        {coreLoading ? (
+                            <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
+                        ) : pieData.length > 0 ? (
                             <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
                                 <PieChart {...pieConfig} />
                             </Suspense>
@@ -284,6 +336,7 @@ const DashboardPage: React.FC = () => {
                             dataSource={recentEmails}
                             columns={emailColumns}
                             rowKey="id"
+                            loading={coreLoading}
                             pagination={false}
                             size="small"
                             locale={{ emptyText: '暂无数据' }}
@@ -301,6 +354,7 @@ const DashboardPage: React.FC = () => {
                             dataSource={recentApiKeys}
                             columns={apiKeyColumns}
                             rowKey="id"
+                            loading={coreLoading}
                             pagination={false}
                             size="small"
                             locale={{ emptyText: '暂无数据' }}

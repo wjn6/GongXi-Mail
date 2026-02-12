@@ -5,11 +5,9 @@ import zhCN from 'antd/locale/zh_CN';
 import { useAuthStore } from './stores/authStore';
 import { isSuperAdmin } from './utils/auth';
 
-// Layouts
-import MainLayout from './layouts/MainLayout';
-
 // Pages (lazy loaded)
 const LoginPage = lazy(() => import('./pages/login'));
+const MainLayout = lazy(() => import('./layouts/MainLayout'));
 const DashboardPage = lazy(() => import('./pages/dashboard'));
 const EmailsPage = lazy(() => import('./pages/emails'));
 const ApiKeysPage = lazy(() => import('./pages/api-keys'));
@@ -79,7 +77,7 @@ const App: React.FC = () => {
               path="/"
               element={
                 <ProtectedRoute>
-                  <MainLayout />
+                  {withSuspense(<MainLayout />)}
                 </ProtectedRoute>
               }
             >
