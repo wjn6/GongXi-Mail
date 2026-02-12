@@ -26,11 +26,20 @@ export default defineConfig({
           if (!id.includes('node_modules')) {
             return
           }
+          if (id.includes('@ant-design/charts')) {
+            return 'charts-wrapper-vendor'
+          }
+          if (id.includes('@antv/')) {
+            return 'antv-core-vendor'
+          }
+          if (id.includes('@ant-design/icons')) {
+            return 'antd-icons-vendor'
+          }
+          if (id.includes('antd')) {
+            return 'antd-core-vendor'
+          }
           if (id.includes('react') || id.includes('scheduler')) {
             return 'react-vendor'
-          }
-          if (id.includes('antd') || id.includes('@ant-design')) {
-            return 'antd-vendor'
           }
           if (id.includes('react-router-dom') || id.includes('react-router')) {
             return 'router-vendor'

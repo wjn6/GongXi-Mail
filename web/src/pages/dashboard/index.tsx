@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Row, Col, Card, Table, Tag, Typography, Spin } from 'antd';
 import {
     MailOutlined,
@@ -6,12 +6,21 @@ import {
     CheckCircleOutlined,
     ApiOutlined,
 } from '@ant-design/icons';
-import { Line, Pie } from '@ant-design/charts';
 import { StatCard, PageHeader } from '../../components';
 import { dashboardApi, emailApi, apiKeyApi } from '../../api';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
+
+const LineChart = lazy(async () => {
+    const mod = await import('@ant-design/charts');
+    return { default: mod.Line as React.ComponentType<Record<string, unknown>> };
+});
+
+const PieChart = lazy(async () => {
+    const mod = await import('@ant-design/charts');
+    return { default: mod.Pie as React.ComponentType<Record<string, unknown>> };
+});
 
 interface Stats {
     apiKeys: {
@@ -143,7 +152,7 @@ const DashboardPage: React.FC = () => {
     ];
 
     // 图表配置
-    const lineConfig = {
+    const lineConfig = useMemo(() => ({
         data: apiTrend,
         xField: 'date',
         yField: 'count',
@@ -159,15 +168,15 @@ const DashboardPage: React.FC = () => {
                 formatter: (v: string) => dayjs(v).format('MM-DD'),
             },
         },
-    };
+    }), [apiTrend]);
 
-    const pieData = stats ? [
+    const pieData = useMemo(() => (stats ? [
         { type: '正常', value: stats.emails.active },
         { type: '异常', value: stats.emails.error },
         { type: '禁用', value: Math.max(0, stats.emails.total - stats.emails.active - stats.emails.error) },
-    ].filter(d => d.value > 0) : [];
+    ].filter(d => d.value > 0) : []), [stats]);
 
-    const pieConfig = {
+    const pieConfig = useMemo(() => ({
         data: pieData,
         angleField: 'value',
         colorField: 'type',
@@ -185,7 +194,7 @@ const DashboardPage: React.FC = () => {
             title: { content: '邮箱' },
             content: { content: stats?.emails.total?.toString() || '0' },
         },
-    };
+    }), [pieData, stats]);
 
     if (loading) {
         return (
@@ -241,13 +250,17 @@ const DashboardPage: React.FC = () => {
             <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                 <Col xs={24} md={16}>
                     <Card title="API 调用趋势（近7天）" bordered={false}>
-                        <Line {...lineConfig} />
+                        <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
+                            <LineChart {...lineConfig} />
+                        </Suspense>
                     </Card>
                 </Col>
                 <Col xs={24} md={8}>
                     <Card title="邮箱状态分布" bordered={false}>
                         {pieData.length > 0 ? (
-                            <Pie {...pieConfig} />
+                            <Suspense fallback={<div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>}>
+                                <PieChart {...pieConfig} />
+                            </Suspense>
                         ) : (
                             <div style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <Text type="secondary">暂无数据</Text>
