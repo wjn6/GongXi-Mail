@@ -1,36 +1,84 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Form, Input, Button, Card, Typography, message } from 'antd';
+import { Form, Input, Button, Card, Typography, message, Modal, Space } from 'antd';
 import { UserOutlined, LockOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { authApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
-import { requestData } from '../../utils/request';
+import { getErrorMessage } from '../../utils/error';
 
 const { Title, Text } = Typography;
 
 interface LoginForm {
     username: string;
     password: string;
-    otp?: string;
 }
 
 const LoginPage: React.FC = () => {
     const navigate = useNavigate();
     const { setAuth } = useAuthStore();
     const [loading, setLoading] = useState(false);
+    const [otpModalVisible, setOtpModalVisible] = useState(false);
+    const [otpLoading, setOtpLoading] = useState(false);
+    const [otpCode, setOtpCode] = useState('');
+    const [pendingCredentials, setPendingCredentials] = useState<{ username: string; password: string } | null>(null);
+
+    const finishLogin = (result: { token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN'; twoFactorEnabled?: boolean } }) => {
+        setAuth(result.token, result.admin);
+        message.success('登录成功');
+        navigate('/');
+    };
 
     const handleSubmit = async (values: LoginForm) => {
         setLoading(true);
-        const result = await requestData<{ token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN' } }>(
-            () => authApi.login(values.username, values.password, values.otp?.trim() || undefined),
-            '登录失败'
-        );
-        if (result) {
-            setAuth(result.token, result.admin);
-            message.success('登录成功');
-            navigate('/');
+        try {
+            const response = await authApi.login(values.username, values.password);
+            if (response.code === 200) {
+                finishLogin(response.data as { token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN'; twoFactorEnabled?: boolean } });
+            }
+        } catch (err: unknown) {
+            const errCode = String((err as { code?: unknown })?.code || '').toUpperCase();
+            if (errCode === 'INVALID_OTP') {
+                setPendingCredentials({ username: values.username, password: values.password });
+                setOtpCode('');
+                setOtpModalVisible(true);
+                message.info('该账号已启用二次验证，请输入 6 位验证码');
+            } else {
+                message.error(getErrorMessage(err, '登录失败'));
+            }
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
+    };
+
+    const handleOtpConfirm = async () => {
+        if (!pendingCredentials) {
+            return;
+        }
+        const otp = otpCode.trim();
+        if (!/^\d{6}$/.test(otp)) {
+            message.error('请输入 6 位验证码');
+            return;
+        }
+
+        setOtpLoading(true);
+        try {
+            const response = await authApi.login(pendingCredentials.username, pendingCredentials.password, otp);
+            if (response.code === 200) {
+                setOtpModalVisible(false);
+                setPendingCredentials(null);
+                setOtpCode('');
+                finishLogin(response.data as { token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN'; twoFactorEnabled?: boolean } });
+            }
+        } catch (err: unknown) {
+            const errCode = String((err as { code?: unknown })?.code || '').toUpperCase();
+            if (errCode === 'INVALID_OTP') {
+                message.error('验证码错误，请重试');
+            } else {
+                message.error(getErrorMessage(err, '验证失败'));
+            }
+        } finally {
+            setOtpLoading(false);
+        }
     };
 
     return (
@@ -82,19 +130,11 @@ const LoginPage: React.FC = () => {
                     </Form.Item>
 
                     <Form.Item
-                        name="otp"
-                        rules={[
-                            {
-                                pattern: /^\d{6}$/,
-                                message: '请输入 6 位验证码',
-                            },
-                        ]}
+                        style={{ marginTop: -6, marginBottom: 16 }}
                     >
-                        <Input
-                            prefix={<SafetyCertificateOutlined />}
-                            placeholder="二次验证码（可选，6 位数字）"
-                            maxLength={6}
-                        />
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                            若账号已启用 2FA，下一步会弹窗输入验证码
+                        </Text>
                     </Form.Item>
 
                     <Form.Item style={{ marginBottom: 0 }}>
@@ -109,6 +149,32 @@ const LoginPage: React.FC = () => {
                     </Form.Item>
                 </Form>
             </Card>
+
+            <Modal
+                title="二次验证"
+                open={otpModalVisible}
+                onOk={handleOtpConfirm}
+                onCancel={() => {
+                    setOtpModalVisible(false);
+                    setPendingCredentials(null);
+                    setOtpCode('');
+                }}
+                okText="验证并登录"
+                cancelText="取消"
+                confirmLoading={otpLoading}
+                destroyOnClose
+            >
+                <Space direction="vertical" style={{ width: '100%' }}>
+                    <Text type="secondary">请输入验证器中的 6 位动态码</Text>
+                    <Input
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        prefix={<SafetyCertificateOutlined />}
+                        maxLength={6}
+                        placeholder="6 位验证码"
+                    />
+                </Space>
+            </Modal>
         </div>
     );
 };
