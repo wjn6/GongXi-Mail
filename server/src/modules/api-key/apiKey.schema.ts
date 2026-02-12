@@ -1,10 +1,23 @@
 import { z } from 'zod';
+import { isKnownApiPermissionKey } from '../../plugins/api-permissions.js';
+
+const permissionsSchema = z.record(z.boolean()).superRefine((permissions, ctx) => {
+    for (const key of Object.keys(permissions)) {
+        if (!isKnownApiPermissionKey(key)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: [key],
+                message: `Unknown permission key: ${key}`,
+            });
+        }
+    }
+});
 
 export const createApiKeySchema = z.object({
     name: z.string().min(1).max(100),
     rateLimit: z.number().min(1).max(10000).optional(),
     expiresAt: z.string().datetime().nullable().optional(),
-    permissions: z.record(z.boolean()).optional(),
+    permissions: permissionsSchema.optional(),
 });
 
 export const updateApiKeySchema = z.object({
@@ -12,7 +25,7 @@ export const updateApiKeySchema = z.object({
     rateLimit: z.number().min(1).max(10000).optional(),
     status: z.enum(['ACTIVE', 'DISABLED']).optional(),
     expiresAt: z.string().datetime().nullable().optional(),
-    permissions: z.record(z.boolean()).optional(),
+    permissions: permissionsSchema.optional(),
 });
 
 export const listApiKeySchema = z.object({

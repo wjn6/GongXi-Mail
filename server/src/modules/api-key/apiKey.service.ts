@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma.js';
 import { generateApiKey } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
+import { parseApiPermissions } from '../../plugins/api-permissions.js';
 import type { Prisma } from '@prisma/client';
 import type { CreateApiKeyInput, UpdateApiKeyInput, ListApiKeyInput } from './apiKey.schema.js';
 
@@ -60,6 +61,7 @@ export const apiKeyService = {
      */
     async create(input: CreateApiKeyInput, createdBy: number) {
         const { name, rateLimit, expiresAt, permissions } = input;
+        const normalizedPermissions = parseApiPermissions(permissions);
 
         // 生成 API Key
         const { key, prefix, hash } = generateApiKey();
@@ -71,7 +73,7 @@ export const apiKeyService = {
                 keyPrefix: prefix,
                 rateLimit: rateLimit || 60,
                 expiresAt: expiresAt ? new Date(expiresAt) : null,
-                permissions: permissions ? permissions : undefined,
+                permissions: normalizedPermissions ? normalizedPermissions : undefined,
                 createdBy,
             },
             select: {
@@ -133,10 +135,16 @@ export const apiKeyService = {
             throw new AppError('NOT_FOUND', 'API Key not found', 404);
         }
 
-        const { expiresAt, ...rest } = input;
+        const { expiresAt, permissions, ...rest } = input;
         const updateData: Prisma.ApiKeyUpdateInput = { ...rest };
         if (expiresAt !== undefined) {
             updateData.expiresAt = expiresAt ? new Date(expiresAt) : null;
+        }
+        if (permissions !== undefined) {
+            const normalizedPermissions = parseApiPermissions(permissions);
+            if (normalizedPermissions) {
+                updateData.permissions = normalizedPermissions;
+            }
         }
 
         const apiKey = await prisma.apiKey.update({

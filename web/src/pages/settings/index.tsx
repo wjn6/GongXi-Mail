@@ -126,7 +126,7 @@ const SettingsPage: React.FC = () => {
                             # 通过 Query 参数传递 API Key
                         </Text>
                         <Text code style={{ display: 'block', wordBreak: 'break-all' }}>
-                            curl "https://your-domain.com/api/mail_all?api_key=your_api_key&email=xxx@outlook.com&client_id=xxx&refresh_token=xxx"
+                            curl "https://your-domain.com/api/mail_all?api_key=your_api_key&email=xxx@outlook.com"
                         </Text>
                     </div>
                 </Card>

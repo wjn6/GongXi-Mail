@@ -162,6 +162,11 @@ npm run test
 | `pool_stats` | 邮箱池统计 |
 | `pool_reset` | 重置邮箱池 |
 
+## API Key 权限键
+
+API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`、`process_mailbox`）。  
+未配置 `permissions` 时默认允许全部接口。
+
 ## 生产配置要求
 
 - `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 必须通过外部环境变量注入。

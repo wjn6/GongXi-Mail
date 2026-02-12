@@ -36,6 +36,7 @@ import {
 import { apiKeyApi, groupApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
+import { LOG_ACTION_OPTIONS } from '../../constants/logActions';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -58,6 +59,10 @@ interface ApiKey {
     usageCount: number;
     createdAt: string;
     createdByName: string;
+}
+
+interface ApiKeyDetail extends ApiKey {
+    permissions?: Record<string, boolean> | null;
 }
 
 interface PoolStats {
@@ -98,11 +103,25 @@ const ApiKeysPage: React.FC = () => {
     const [emailModalVisible, setEmailModalVisible] = useState(false);
     const [emailLoading, setEmailLoading] = useState(false);
     const [savingEmails, setSavingEmails] = useState(false);
+    const [apiKeyDetailLoading, setApiKeyDetailLoading] = useState(false);
     const [groups, setGroups] = useState<EmailGroup[]>([]);
     const [poolGroupName, setPoolGroupName] = useState<string | undefined>(undefined);
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
     const latestListRequestIdRef = useRef(0);
     const [form] = Form.useForm();
+
+    const permissionActionOptions = useMemo(
+        () =>
+            LOG_ACTION_OPTIONS.map((item) => ({
+                value: item.value,
+                label: item.label,
+            })),
+        []
+    );
+    const allPermissionActions = useMemo(
+        () => permissionActionOptions.map((item) => item.value),
+        [permissionActionOptions]
+    );
 
     const extractUsedEmailIds = useCallback(
         (emails: PoolEmailItem[]) => emails.filter((item) => item.used).map((item) => item.id),
@@ -147,20 +166,48 @@ const ApiKeysPage: React.FC = () => {
 
     const handleCreate = () => {
         setEditingId(null);
+        setApiKeyDetailLoading(false);
         form.resetFields();
+        form.setFieldsValue({
+            permissions: allPermissionActions,
+        });
         setModalVisible(true);
     };
 
-    const handleEdit = useCallback((record: ApiKey) => {
+    const handleEdit = useCallback(async (record: ApiKey) => {
         setEditingId(record.id);
+        setApiKeyDetailLoading(true);
         form.setFieldsValue({
             name: record.name,
             rateLimit: record.rateLimit,
             status: record.status,
             expiresAt: record.expiresAt ? dayjs(record.expiresAt) : null,
+            permissions: allPermissionActions,
         });
         setModalVisible(true);
-    }, [form]);
+        try {
+            const detail = await requestData<ApiKeyDetail>(
+                () => apiKeyApi.getById(record.id),
+                '获取 API Key 详情失败'
+            );
+            if (detail) {
+                const selectedPermissions = detail.permissions
+                    ? Object.entries(detail.permissions)
+                        .filter(([, allowed]) => allowed)
+                        .map(([permission]) => permission.replace(/-/g, '_'))
+                    : allPermissionActions;
+                form.setFieldsValue({
+                    name: detail.name,
+                    rateLimit: detail.rateLimit,
+                    status: detail.status,
+                    expiresAt: detail.expiresAt ? dayjs(detail.expiresAt) : null,
+                    permissions: selectedPermissions.length > 0 ? selectedPermissions : allPermissionActions,
+                });
+            }
+        } finally {
+            setApiKeyDetailLoading(false);
+        }
+    }, [allPermissionActions, form]);
 
     const handleDelete = useCallback(async (id: number) => {
         try {
@@ -179,11 +226,19 @@ const ApiKeysPage: React.FC = () => {
     const handleSubmit = async () => {
         try {
             const values = await form.validateFields();
+            const selectedPermissions = Array.isArray(values.permissions)
+                ? values.permissions as string[]
+                : [];
+            const permissions = selectedPermissions.reduce<Record<string, boolean>>((acc, action) => {
+                acc[action] = true;
+                return acc;
+            }, {});
 
             if (editingId) {
                 const submitData = {
                     ...values,
                     expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
+                    permissions,
                 };
                 const res = await apiKeyApi.update(editingId, submitData);
                 if (res.code === 200) {
@@ -197,6 +252,7 @@ const ApiKeysPage: React.FC = () => {
                 const submitData = {
                     ...values,
                     expiresAt: values.expiresAt ? values.expiresAt.toISOString() : undefined,
+                    permissions,
                 };
                 const res = await apiKeyApi.create(submitData);
                 if (res.code === 200) {
@@ -500,6 +556,7 @@ const ApiKeysPage: React.FC = () => {
                 destroyOnClose
                 width={500}
             >
+                <Spin spinning={apiKeyDetailLoading}>
                 <Form form={form} layout="vertical">
                     <Form.Item
                         name="name"
@@ -536,7 +593,18 @@ const ApiKeysPage: React.FC = () => {
                             </Select>
                         </Form.Item>
                     )}
+                    <Form.Item
+                        name="permissions"
+                        label="可调用接口权限"
+                        rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个权限' }]}
+                    >
+                        <Checkbox.Group
+                            options={permissionActionOptions}
+                            style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', rowGap: 8 }}
+                        />
+                    </Form.Item>
                 </Form>
+                </Spin>
             </Modal>
 
             {/* 新建 Key 显示弹窗 */}
