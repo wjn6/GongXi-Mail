@@ -39,6 +39,10 @@ interface RequestGetConfig extends AxiosRequestConfig {
     cacheMs?: number;
 }
 
+interface MutationConfig extends AxiosRequestConfig {
+    invalidatePrefixes?: string[];
+}
+
 type ApiResult<T = unknown> = Promise<ApiResponse<T>>;
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
@@ -74,6 +78,25 @@ const stableStringify = (value: unknown): string => {
 const buildGetRequestKey = (url: string, config?: AxiosRequestConfig): string => {
     const paramsKey = stableStringify(config?.params);
     return `${url}?${paramsKey}`;
+};
+
+const invalidateGetCache = (prefixes?: string[]) => {
+    if (!prefixes || prefixes.length === 0) {
+        return;
+    }
+
+    for (const key of Array.from(getResponseCache.keys())) {
+        if (prefixes.some((prefix) => key.startsWith(prefix))) {
+            getResponseCache.delete(key);
+        }
+    }
+
+    for (const [key, controller] of Array.from(pendingGetControllers.entries())) {
+        if (prefixes.some((prefix) => key.startsWith(prefix))) {
+            controller.abort();
+            pendingGetControllers.delete(key);
+        }
+    }
 };
 
 const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
@@ -213,17 +236,34 @@ const requestGet = <T>(url: string, config?: RequestGetConfig): ApiResult<T> => 
 const requestPost = <TResponse, TBody = unknown>(
     url: string,
     data?: TBody,
-    config?: AxiosRequestConfig
-): ApiResult<TResponse> => api.post<TBody, ApiResponse<TResponse>>(url, data, config);
+    config?: MutationConfig
+): ApiResult<TResponse> => {
+    const { invalidatePrefixes, ...axiosConfig } = config || {};
+    return api.post<TBody, ApiResponse<TResponse>>(url, data, axiosConfig).then((response) => {
+        invalidateGetCache(invalidatePrefixes);
+        return response;
+    });
+};
 
 const requestPut = <TResponse, TBody = unknown>(
     url: string,
     data?: TBody,
-    config?: AxiosRequestConfig
-): ApiResult<TResponse> => api.put<TBody, ApiResponse<TResponse>>(url, data, config);
+    config?: MutationConfig
+): ApiResult<TResponse> => {
+    const { invalidatePrefixes, ...axiosConfig } = config || {};
+    return api.put<TBody, ApiResponse<TResponse>>(url, data, axiosConfig).then((response) => {
+        invalidateGetCache(invalidatePrefixes);
+        return response;
+    });
+};
 
-const requestDelete = <T>(url: string, config?: AxiosRequestConfig): ApiResult<T> =>
-    api.delete<unknown, ApiResponse<T>>(url, config);
+const requestDelete = <T>(url: string, config?: MutationConfig): ApiResult<T> => {
+    const { invalidatePrefixes, ...axiosConfig } = config || {};
+    return api.delete<unknown, ApiResponse<T>>(url, axiosConfig).then((response) => {
+        invalidateGetCache(invalidatePrefixes);
+        return response;
+    });
+};
 
 // ========================================
 // 认证 API
@@ -263,17 +303,19 @@ export const adminApi = {
     create: (data: { username: string; password: string; email?: string; role?: string; status?: string }) =>
         requestPost<Record<string, unknown>, { username: string; password: string; email?: string; role?: string; status?: string }>(
             '/admin/admins',
-            data
+            data,
+            { invalidatePrefixes: ['/admin/admins'] }
         ),
 
     update: (id: number, data: { username?: string; password?: string; email?: string; role?: string; status?: string }) =>
         requestPut<Record<string, unknown>, { username?: string; password?: string; email?: string; role?: string; status?: string }>(
             `/admin/admins/${id}`,
-            data
+            data,
+            { invalidatePrefixes: ['/admin/admins'] }
         ),
 
     delete: (id: number) =>
-        requestDelete<Record<string, unknown>>(`/admin/admins/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/admins/${id}`, { invalidatePrefixes: ['/admin/admins'] }),
 };
 
 // ========================================
@@ -290,17 +332,23 @@ export const apiKeyApi = {
     create: (data: { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }) =>
         requestPost<{ key: string }, { name: string; permissions?: Record<string, boolean>; rateLimit?: number; expiresAt?: string | null }>(
             '/admin/api-keys',
-            data
+            data,
+            { invalidatePrefixes: ['/admin/api-keys', '/admin/dashboard/stats'] }
         ),
 
     update: (id: number, data: { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }) =>
         requestPut<Record<string, unknown>, { name?: string; permissions?: Record<string, boolean>; rateLimit?: number; status?: string; expiresAt?: string | null }>(
             `/admin/api-keys/${id}`,
-            data
+            data,
+            {
+                invalidatePrefixes: ['/admin/api-keys', `/admin/api-keys/${id}`, '/admin/dashboard/stats'],
+            }
         ),
 
     delete: (id: number) =>
-        requestDelete<Record<string, unknown>>(`/admin/api-keys/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/api-keys/${id}`, {
+            invalidatePrefixes: ['/admin/api-keys', `/admin/api-keys/${id}`, '/admin/dashboard/stats'],
+        }),
 
     getUsage: (id: number, groupName?: string) =>
         requestGet<{ total: number; used: number; remaining: number }>(`/admin/api-keys/${id}/usage`, {
@@ -311,7 +359,7 @@ export const apiKeyApi = {
     resetPool: (id: number, groupName?: string) =>
         requestPost<Record<string, unknown>, { group?: string }>(`/admin/api-keys/${id}/reset-pool`, {
             group: groupName,
-        }),
+        }, { invalidatePrefixes: [`/admin/api-keys/${id}/usage`, `/admin/api-keys/${id}/pool-emails`] }),
 
     getPoolEmails: <T = Record<string, unknown>>(id: number, groupId?: number) =>
         requestGet<T[]>(`/admin/api-keys/${id}/pool-emails`, { params: { groupId }, cacheMs: 800 }),
@@ -319,7 +367,7 @@ export const apiKeyApi = {
     updatePoolEmails: (id: number, emailIds: number[]) =>
         requestPut<{ count: number }, { emailIds: number[] }>(`/admin/api-keys/${id}/pool-emails`, {
             emailIds,
-        }),
+        }, { invalidatePrefixes: [`/admin/api-keys/${id}/usage`, `/admin/api-keys/${id}/pool-emails`] }),
 };
 
 // ========================================
@@ -336,13 +384,19 @@ export const emailApi = {
     create: (data: { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }) =>
         requestPost<Record<string, unknown>, { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }>(
             '/admin/emails',
-            data
+            data,
+            {
+                invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
+            }
         ),
 
     import: (content: string, separator?: string, groupId?: number) =>
         requestPost<Record<string, unknown>, { content: string; separator?: string; groupId?: number }>(
             '/admin/emails/import',
-            { content, separator, groupId }
+            { content, separator, groupId },
+            {
+                invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
+            }
         ),
 
     export: (ids?: number[], separator?: string, groupId?: number) =>
@@ -353,14 +407,21 @@ export const emailApi = {
     update: (id: number, data: { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }) =>
         requestPut<Record<string, unknown>, { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }>(
             `/admin/emails/${id}`,
-            data
+            data,
+            {
+                invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
+            }
         ),
 
     delete: (id: number) =>
-        requestDelete<Record<string, unknown>>(`/admin/emails/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/emails/${id}`, {
+            invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
+        }),
 
     batchDelete: (ids: number[]) =>
-        requestPost<{ deleted: number }, { ids: number[] }>('/admin/emails/batch-delete', { ids }),
+        requestPost<{ deleted: number }, { ids: number[] }>('/admin/emails/batch-delete', { ids }, {
+            invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
+        }),
 
     // 查看邮件 (管理员专用)
     viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string) =>
@@ -387,27 +448,31 @@ export const groupApi = {
     create: (data: { name: string; description?: string }) =>
         requestPost<Record<string, unknown>, { name: string; description?: string }>(
             '/admin/email-groups',
-            data
+            data,
+            { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }
         ),
 
     update: (id: number, data: { name?: string; description?: string }) =>
         requestPut<Record<string, unknown>, { name?: string; description?: string }>(
             `/admin/email-groups/${id}`,
-            data
+            data,
+            { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }
         ),
 
     delete: (id: number) =>
-        requestDelete<Record<string, unknown>>(`/admin/email-groups/${id}`),
+        requestDelete<Record<string, unknown>>(`/admin/email-groups/${id}`, {
+            invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'],
+        }),
 
     assignEmails: (groupId: number, emailIds: number[]) =>
         requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/assign`, {
             emailIds,
-        }),
+        }, { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }),
 
     removeEmails: (groupId: number, emailIds: number[]) =>
         requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/remove`, {
             emailIds,
-        }),
+        }, { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }),
 };
 
 // ========================================
