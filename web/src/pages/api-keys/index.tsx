@@ -570,192 +570,196 @@ const ApiKeysPage: React.FC = () => {
             </Modal>
 
             {/* 邮箱池弹窗 */}
-            <Modal
-                title={
-                    <Space>
-                        <DatabaseOutlined />
-                        <span>邮箱池管理 - {currentApiKey?.name}</span>
-                    </Space>
-                }
-                open={poolModalVisible}
-                onCancel={() => setPoolModalVisible(false)}
-                footer={null}
-                destroyOnClose
-                width={500}
-            >
-                {poolLoading ? (
-                    <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
-                ) : poolStats ? (
-                    <div>
-                        <div style={{ marginBottom: 16 }}>
-                            <Text type="secondary" style={{ marginRight: 8 }}>按分组筛选：</Text>
-                            <Select
-                                allowClear
-                                placeholder="全部分组"
-                                style={{ width: 200 }}
-                                value={poolGroupName}
-                                options={poolGroupOptions}
-                                onChange={(val: string | undefined) => handlePoolGroupChange(val)}
-                            />
-                        </div>
-                        <Row gutter={16} style={{ marginBottom: 24 }}>
-                            <Col span={8}>
-                                <div className="stat-blue">
-                                    <Statistic
-                                        title="总邮箱数"
-                                        value={poolStats.total}
-                                    />
-                                </div>
-                            </Col>
-                            <Col span={8}>
-                                <div className="stat-orange">
-                                    <Statistic
-                                        title="已使用"
-                                        value={poolStats.used}
-                                    />
-                                </div>
-                            </Col>
-                            <Col span={8}>
-                                <div className={poolStats.remaining > 0 ? 'stat-green' : 'stat-red'}>
-                                    <Statistic
-                                        title="剩余可用"
-                                        value={poolStats.remaining}
-                                    />
-                                </div>
-                            </Col>
-                        </Row>
-                        <style>{`
-                            .stat-blue .ant-statistic-content-value { color: #1890ff; }
-                            .stat-orange .ant-statistic-content-value { color: #faad14; }
-                            .stat-green .ant-statistic-content-value { color: #52c41a; }
-                            .stat-red .ant-statistic-content-value { color: #ff4d4f; }
-                        `}</style>
-
-                        <div style={{ marginBottom: 24 }}>
-                            <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                                使用进度
-                            </Text>
-                            <Progress
-                                percent={poolStats.total > 0 ? Math.round((poolStats.used / poolStats.total) * 100) : 0}
-                                status={poolStats.remaining === 0 ? 'exception' : 'active'}
-                                strokeColor={{
-                                    '0%': '#108ee9',
-                                    '100%': '#87d068',
-                                }}
-                            />
-                        </div>
-
-                        <Divider />
-
-                        <div style={{ textAlign: 'center' }}>
-                            <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-                                重置后，此 API Key 可重新使用所有邮箱
-                            </Text>
-                            <Popconfirm
-                                title="确定要重置邮箱池吗？"
-                                description={poolGroupName ? `仅重置分组 "${poolGroupName}" 的使用记录` : '重置后该 API Key 可重新使用所有邮箱'}
-                                onConfirm={handleResetPool}
-                            >
-                                <Button
-                                    type="primary"
-                                    danger
-                                    icon={<ThunderboltOutlined />}
-                                >
-                                    重置邮箱池
-                                </Button>
-                            </Popconfirm>
-                        </div>
-                    </div>
-                ) : (
-                    <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-                        暂无数据
-                    </div>
-                )}
-            </Modal>
-
-            {/* 邮箱管理弹窗 */}
-            <Modal
-                title={
-                    <Space>
-                        <ThunderboltOutlined />
-                        <span>管理邮箱 - {currentApiKey?.name}</span>
-                    </Space>
-                }
-                open={emailModalVisible}
-                onCancel={() => setEmailModalVisible(false)}
-                onOk={handleSaveEmails}
-                okText="保存"
-                cancelText="取消"
-                confirmLoading={savingEmails}
-                destroyOnClose
-                width={600}
-            >
-                {emailLoading ? (
-                    <div style={{ textAlign: 'center', padding: 40 }}>
-                        <Spin />
-                    </div>
-                ) : (
-                    <div>
-                        <div style={{ marginBottom: 16 }}>
-                            <Space>
-                                <Text type="secondary">按分组筛选：</Text>
+            {poolModalVisible && (
+                <Modal
+                    title={
+                        <Space>
+                            <DatabaseOutlined />
+                            <span>邮箱池管理 - {currentApiKey?.name}</span>
+                        </Space>
+                    }
+                    open={poolModalVisible}
+                    onCancel={() => setPoolModalVisible(false)}
+                    footer={null}
+                    destroyOnClose
+                    width={500}
+                >
+                    {poolLoading ? (
+                        <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
+                    ) : poolStats ? (
+                        <div>
+                            <div style={{ marginBottom: 16 }}>
+                                <Text type="secondary" style={{ marginRight: 8 }}>按分组筛选：</Text>
                                 <Select
                                     allowClear
                                     placeholder="全部分组"
-                                    style={{ width: 180 }}
-                                    value={emailGroupId}
-                                    options={emailGroupOptions}
-                                    onChange={(val: number | undefined) => handleEmailGroupChange(val)}
+                                    style={{ width: 200 }}
+                                    value={poolGroupName}
+                                    options={poolGroupOptions}
+                                    onChange={(val: string | undefined) => handlePoolGroupChange(val)}
                                 />
-                            </Space>
-                        </div>
-                        <div style={{ marginBottom: 16 }}>
-                            <Text type="secondary">
-                                勾选的邮箱表示该 API Key 已使用过（不会再自动分配）
-                            </Text>
-                        </div>
-                        <div style={{ marginBottom: 16 }}>
-                            <Space>
-                                <Button
-                                    size="small"
-                                    onClick={() => setSelectedEmails(emailList.map(e => e.id))}
-                                >
-                                    全选
-                                </Button>
-                                <Button
-                                    size="small"
-                                    onClick={() => setSelectedEmails([])}
-                                >
-                                    取消全选
-                                </Button>
-                                <Text type="secondary">
-                                    已选择 {selectedEmails.length} / {emailList.length}
+                            </div>
+                            <Row gutter={16} style={{ marginBottom: 24 }}>
+                                <Col span={8}>
+                                    <div className="stat-blue">
+                                        <Statistic
+                                            title="总邮箱数"
+                                            value={poolStats.total}
+                                        />
+                                    </div>
+                                </Col>
+                                <Col span={8}>
+                                    <div className="stat-orange">
+                                        <Statistic
+                                            title="已使用"
+                                            value={poolStats.used}
+                                        />
+                                    </div>
+                                </Col>
+                                <Col span={8}>
+                                    <div className={poolStats.remaining > 0 ? 'stat-green' : 'stat-red'}>
+                                        <Statistic
+                                            title="剩余可用"
+                                            value={poolStats.remaining}
+                                        />
+                                    </div>
+                                </Col>
+                            </Row>
+                            <style>{`
+                                .stat-blue .ant-statistic-content-value { color: #1890ff; }
+                                .stat-orange .ant-statistic-content-value { color: #faad14; }
+                                .stat-green .ant-statistic-content-value { color: #52c41a; }
+                                .stat-red .ant-statistic-content-value { color: #ff4d4f; }
+                            `}</style>
+
+                            <div style={{ marginBottom: 24 }}>
+                                <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                                    使用进度
                                 </Text>
-                            </Space>
+                                <Progress
+                                    percent={poolStats.total > 0 ? Math.round((poolStats.used / poolStats.total) * 100) : 0}
+                                    status={poolStats.remaining === 0 ? 'exception' : 'active'}
+                                    strokeColor={{
+                                        '0%': '#108ee9',
+                                        '100%': '#87d068',
+                                    }}
+                                />
+                            </div>
+
+                            <Divider />
+
+                            <div style={{ textAlign: 'center' }}>
+                                <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+                                    重置后，此 API Key 可重新使用所有邮箱
+                                </Text>
+                                <Popconfirm
+                                    title="确定要重置邮箱池吗？"
+                                    description={poolGroupName ? `仅重置分组 "${poolGroupName}" 的使用记录` : '重置后该 API Key 可重新使用所有邮箱'}
+                                    onConfirm={handleResetPool}
+                                >
+                                    <Button
+                                        type="primary"
+                                        danger
+                                        icon={<ThunderboltOutlined />}
+                                    >
+                                        重置邮箱池
+                                    </Button>
+                                </Popconfirm>
+                            </div>
                         </div>
-                        <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: 12 }}>
-                            <Checkbox.Group
-                                value={selectedEmails}
-                                onChange={(vals) => setSelectedEmails(vals as number[])}
-                                style={{ width: '100%' }}
-                            >
-                                <Row>
-                                    {emailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
-                                        <Col span={12} key={email.id} style={{ marginBottom: 8 }}>
-                                            <Checkbox value={email.id}>
-                                                {email.email}
-                                                {email.groupName && (
-                                                    <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>{email.groupName}</Tag>
-                                                )}
-                                            </Checkbox>
-                                        </Col>
-                                    ))}
-                                </Row>
-                            </Checkbox.Group>
+                    ) : (
+                        <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                            暂无数据
                         </div>
-                    </div>
-                )}
-            </Modal>
+                    )}
+                </Modal>
+            )}
+
+            {/* 邮箱管理弹窗 */}
+            {emailModalVisible && (
+                <Modal
+                    title={
+                        <Space>
+                            <ThunderboltOutlined />
+                            <span>管理邮箱 - {currentApiKey?.name}</span>
+                        </Space>
+                    }
+                    open={emailModalVisible}
+                    onCancel={() => setEmailModalVisible(false)}
+                    onOk={handleSaveEmails}
+                    okText="保存"
+                    cancelText="取消"
+                    confirmLoading={savingEmails}
+                    destroyOnClose
+                    width={600}
+                >
+                    {emailLoading ? (
+                        <div style={{ textAlign: 'center', padding: 40 }}>
+                            <Spin />
+                        </div>
+                    ) : (
+                        <div>
+                            <div style={{ marginBottom: 16 }}>
+                                <Space>
+                                    <Text type="secondary">按分组筛选：</Text>
+                                    <Select
+                                        allowClear
+                                        placeholder="全部分组"
+                                        style={{ width: 180 }}
+                                        value={emailGroupId}
+                                        options={emailGroupOptions}
+                                        onChange={(val: number | undefined) => handleEmailGroupChange(val)}
+                                    />
+                                </Space>
+                            </div>
+                            <div style={{ marginBottom: 16 }}>
+                                <Text type="secondary">
+                                    勾选的邮箱表示该 API Key 已使用过（不会再自动分配）
+                                </Text>
+                            </div>
+                            <div style={{ marginBottom: 16 }}>
+                                <Space>
+                                    <Button
+                                        size="small"
+                                        onClick={() => setSelectedEmails(emailList.map(e => e.id))}
+                                    >
+                                        全选
+                                    </Button>
+                                    <Button
+                                        size="small"
+                                        onClick={() => setSelectedEmails([])}
+                                    >
+                                        取消全选
+                                    </Button>
+                                    <Text type="secondary">
+                                        已选择 {selectedEmails.length} / {emailList.length}
+                                    </Text>
+                                </Space>
+                            </div>
+                            <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: 12 }}>
+                                <Checkbox.Group
+                                    value={selectedEmails}
+                                    onChange={(vals) => setSelectedEmails(vals as number[])}
+                                    style={{ width: '100%' }}
+                                >
+                                    <Row>
+                                        {emailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
+                                            <Col span={12} key={email.id} style={{ marginBottom: 8 }}>
+                                                <Checkbox value={email.id}>
+                                                    {email.email}
+                                                    {email.groupName && (
+                                                        <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>{email.groupName}</Tag>
+                                                    )}
+                                                </Checkbox>
+                                            </Col>
+                                        ))}
+                                    </Row>
+                                </Checkbox.Group>
+                            </div>
+                        </div>
+                    )}
+                </Modal>
+            )}
         </div>
     );
 };

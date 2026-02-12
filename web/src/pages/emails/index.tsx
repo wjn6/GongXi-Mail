@@ -103,7 +103,6 @@ const EmailsPage: React.FC = () => {
     const [emailDetailContent, setEmailDetailContent] = useState<string>('');
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
     const [emailEditLoading, setEmailEditLoading] = useState(false);
-    const [renderEmailDetailFrame, setRenderEmailDetailFrame] = useState(false);
     const [form] = Form.useForm();
 
     // Group-related state
@@ -909,104 +908,101 @@ const EmailsPage: React.FC = () => {
             </Modal>
 
             {/* 邮件列表 Modal */}
-            <Modal
-                title={`${currentEmail} 的${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}`}
-                open={mailModalVisible}
-                onCancel={() => setMailModalVisible(false)}
-                footer={null}
-                destroyOnClose
-                width={1000}
-                styles={{ body: { padding: '16px 24px' } }}
-            >
-                <Space style={{ marginBottom: 16 }}>
-                    <Button type="primary" onClick={handleRefreshMails} loading={mailLoading}>
-                        收取新邮件
-                    </Button>
-                    <Popconfirm
-                        title={`确定要清空${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}的所有邮件吗？`}
-                        onConfirm={handleClearMailbox}
-                    >
-                        <Button danger>清空</Button>
-                    </Popconfirm>
-                    <span style={{ marginLeft: 16, color: '#888' }}>
-                        共 {mailList.length} 封邮件
-                    </span>
-                </Space>
-                <List
-                    loading={mailLoading}
-                    dataSource={mailList}
-                    itemLayout="horizontal"
-                    pagination={{
-                        pageSize: 10,
-                        showSizeChanger: true,
-                        showQuickJumper: true,
-                        showTotal: (total: number) => `共 ${total} 条`,
-                        style: { marginTop: 16 },
-                    }}
-                    style={{ maxHeight: 450, overflow: 'auto' }}
-                    renderItem={(item: MailItem) => (
-                        <List.Item
-                            key={item.id}
-                            actions={[
-                                <Button
-                                    type="primary"
-                                    size="small"
-                                    onClick={() => handleViewEmailDetail(item)}
-                                >
-                                    查看
-                                </Button>
-                            ]}
+            {mailModalVisible && (
+                <Modal
+                    title={`${currentEmail} 的${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}`}
+                    open={mailModalVisible}
+                    onCancel={() => setMailModalVisible(false)}
+                    footer={null}
+                    destroyOnClose
+                    width={1000}
+                    styles={{ body: { padding: '16px 24px' } }}
+                >
+                    <Space style={{ marginBottom: 16 }}>
+                        <Button type="primary" onClick={handleRefreshMails} loading={mailLoading}>
+                            收取新邮件
+                        </Button>
+                        <Popconfirm
+                            title={`确定要清空${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}的所有邮件吗？`}
+                            onConfirm={handleClearMailbox}
                         >
-                            <List.Item.Meta
-                                title={
-                                    <Typography.Text ellipsis style={{ maxWidth: 600 }}>
-                                        {item.subject || '(无主题)'}
-                                    </Typography.Text>
-                                }
-                                description={
-                                    <Space size="large">
-                                        <span style={{ color: '#1890ff' }}>{item.from || '未知发件人'}</span>
-                                        <span style={{ color: '#999' }}>
-                                            {item.date ? dayjs(item.date).format('YYYY-MM-DD HH:mm') : '-'}
-                                        </span>
-                                    </Space>
-                                }
-                            />
-                        </List.Item>
-                    )}
-                />
-            </Modal>
+                            <Button danger>清空</Button>
+                        </Popconfirm>
+                        <span style={{ marginLeft: 16, color: '#888' }}>
+                            共 {mailList.length} 封邮件
+                        </span>
+                    </Space>
+                    <List
+                        loading={mailLoading}
+                        dataSource={mailList}
+                        itemLayout="horizontal"
+                        pagination={{
+                            pageSize: 10,
+                            showSizeChanger: true,
+                            showQuickJumper: true,
+                            showTotal: (total: number) => `共 ${total} 条`,
+                            style: { marginTop: 16 },
+                        }}
+                        style={{ maxHeight: 450, overflow: 'auto' }}
+                        renderItem={(item: MailItem) => (
+                            <List.Item
+                                key={item.id}
+                                actions={[
+                                    <Button
+                                        type="primary"
+                                        size="small"
+                                        onClick={() => handleViewEmailDetail(item)}
+                                    >
+                                        查看
+                                    </Button>,
+                                ]}
+                            >
+                                <List.Item.Meta
+                                    title={
+                                        <Typography.Text ellipsis style={{ maxWidth: 600 }}>
+                                            {item.subject || '(无主题)'}
+                                        </Typography.Text>
+                                    }
+                                    description={
+                                        <Space size="large">
+                                            <span style={{ color: '#1890ff' }}>{item.from || '未知发件人'}</span>
+                                            <span style={{ color: '#999' }}>
+                                                {item.date ? dayjs(item.date).format('YYYY-MM-DD HH:mm') : '-'}
+                                            </span>
+                                        </Space>
+                                    }
+                                />
+                            </List.Item>
+                        )}
+                    />
+                </Modal>
+            )}
 
             {/* 邮件详情 Modal */}
-            <Modal
-                title={emailDetailSubject}
-                open={emailDetailVisible}
-                onCancel={() => setEmailDetailVisible(false)}
-                footer={null}
-                destroyOnClose
-                afterOpenChange={(open: boolean) => setRenderEmailDetailFrame(open)}
-                width={900}
-                styles={{ body: { padding: '16px 24px' } }}
-            >
-                {renderEmailDetailFrame ? (
+            {emailDetailVisible && (
+                <Modal
+                    title={emailDetailSubject}
+                    open={emailDetailVisible}
+                    onCancel={() => setEmailDetailVisible(false)}
+                    footer={null}
+                    destroyOnClose
+                    width={900}
+                    styles={{ body: { padding: '16px 24px' } }}
+                >
                     <iframe
-                    title="email-content"
-                    sandbox="allow-same-origin"
-                    srcDoc={emailDetailSrcDoc}
-                    style={{
-                        width: '100%',
-                        height: 'calc(100vh - 300px)',
-                        border: '1px solid #eee',
-                        borderRadius: '8px',
-                        backgroundColor: '#fafafa',
-                    }}
+                        title="email-content"
+                        sandbox="allow-same-origin"
+                        srcDoc={emailDetailSrcDoc}
+                        style={{
+                            width: '100%',
+                            height: 'calc(100vh - 300px)',
+                            border: '1px solid #eee',
+                            borderRadius: '8px',
+                            backgroundColor: '#fafafa',
+                        }}
                     />
-                ) : (
-                    <div style={{ height: 'calc(100vh - 300px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <Spin />
-                    </div>
-                )}
-            </Modal>
+                </Modal>
+            )}
 
             {/* 创建/编辑分组 Modal */}
             <Modal
