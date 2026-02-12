@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isApiPermissionAllowed } from './auth.js';
+import { isApiPermissionAllowed } from './api-permissions.js';
 
 void test('allows all actions when permissions not set', () => {
     assert.equal(isApiPermissionAllowed(undefined, 'mail_new'), true);
