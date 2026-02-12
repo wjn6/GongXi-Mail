@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Card, Form, Input, Button, message, Typography, Space, Tag, Alert } from 'antd';
+import { Card, Form, Input, Button, message, Typography, Space, Tag, Alert, QRCode } from 'antd';
 import { LockOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { authApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
@@ -255,6 +255,12 @@ const SettingsPage: React.FC = () => {
                             {setupData ? (
                                 <Card size="small" title="绑定信息">
                                     <Space direction="vertical" style={{ width: '100%' }}>
+                                        <div style={{ textAlign: 'center' }}>
+                                            <Text type="secondary">扫码绑定（推荐）</Text>
+                                            <div style={{ marginTop: 8 }}>
+                                                <QRCode value={setupData.otpauthUrl} size={180} />
+                                            </div>
+                                        </div>
                                         <div>
                                             <Text type="secondary">手动密钥（可复制）</Text>
                                             <div><Text copyable>{setupData.secret}</Text></div>

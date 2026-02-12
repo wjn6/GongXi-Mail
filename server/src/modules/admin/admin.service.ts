@@ -30,6 +30,7 @@ export const adminService = {
                     email: true,
                     role: true,
                     status: true,
+                    twoFactorEnabled: true,
                     lastLoginAt: true,
                     createdAt: true,
                 },
@@ -55,6 +56,7 @@ export const adminService = {
                 email: true,
                 role: true,
                 status: true,
+                twoFactorEnabled: true,
                 lastLoginAt: true,
                 lastLoginIp: true,
                 createdAt: true,
@@ -96,6 +98,7 @@ export const adminService = {
                 email: true,
                 role: true,
                 status: true,
+                twoFactorEnabled: true,
                 createdAt: true,
             },
         });
@@ -112,11 +115,23 @@ export const adminService = {
             throw new AppError('NOT_FOUND', 'Admin not found', 404);
         }
 
-        const { password, ...rest } = input;
+        const { password, twoFactorEnabled, ...rest } = input;
         const updateData: Prisma.AdminUpdateInput = { ...rest };
 
         if (password) {
             updateData.passwordHash = await hashPassword(password);
+        }
+
+        if (twoFactorEnabled !== undefined) {
+            if (twoFactorEnabled && !admin.twoFactorEnabled) {
+                throw new AppError('INVALID_2FA_UPDATE', 'Cannot enable 2FA without owner setup', 400);
+            }
+
+            updateData.twoFactorEnabled = twoFactorEnabled;
+            if (!twoFactorEnabled) {
+                updateData.twoFactorSecret = null;
+                updateData.twoFactorTempSecret = null;
+            }
         }
 
         const updated = await prisma.admin.update({
@@ -128,6 +143,7 @@ export const adminService = {
                 email: true,
                 role: true,
                 status: true,
+                twoFactorEnabled: true,
                 updatedAt: true,
             },
         });

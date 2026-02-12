@@ -30,6 +30,7 @@ interface Admin {
     email: string | null;
     role: 'SUPER_ADMIN' | 'ADMIN';
     status: 'ACTIVE' | 'DISABLED';
+    twoFactorEnabled: boolean;
     lastLoginAt: string | null;
     lastLoginIp: string | null;
     createdAt: string;
@@ -48,6 +49,7 @@ const AdminsPage: React.FC = () => {
     const [pageSize, setPageSize] = useState(10);
     const [modalVisible, setModalVisible] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
+    const [editingTwoFactorEnabled, setEditingTwoFactorEnabled] = useState(false);
     const [form] = Form.useForm();
     const { admin: currentAdmin } = useAuthStore();
 
@@ -73,17 +75,20 @@ const AdminsPage: React.FC = () => {
 
     const handleCreate = () => {
         setEditingId(null);
+        setEditingTwoFactorEnabled(false);
         form.resetFields();
         setModalVisible(true);
     };
 
     const handleEdit = (record: Admin) => {
         setEditingId(record.id);
+        setEditingTwoFactorEnabled(record.twoFactorEnabled);
         form.setFieldsValue({
             username: record.username,
             email: record.email,
             role: record.role,
             status: record.status,
+            twoFactorEnabled: record.twoFactorEnabled,
             password: '',
         });
         setModalVisible(true);
@@ -164,6 +169,16 @@ const AdminsPage: React.FC = () => {
             render: (status) => (
                 <Tag color={normalizeAdminStatus(status) === 'ACTIVE' ? 'green' : 'red'}>
                     {getAdminStatusLabel(status)}
+                </Tag>
+            ),
+        },
+        {
+            title: '2FA',
+            dataIndex: 'twoFactorEnabled',
+            key: 'twoFactorEnabled',
+            render: (enabled: boolean) => (
+                <Tag color={enabled ? 'green' : 'default'}>
+                    {enabled ? '已启用' : '未启用'}
                 </Tag>
             ),
         },
@@ -291,6 +306,18 @@ const AdminsPage: React.FC = () => {
                             <Select.Option value="DISABLED">禁用</Select.Option>
                         </Select>
                     </Form.Item>
+                    {editingId && (
+                        <Form.Item
+                            name="twoFactorEnabled"
+                            label="二次验证（2FA）"
+                            extra={!editingTwoFactorEnabled ? '启用 2FA 需管理员本人在“设置”页完成绑定' : undefined}
+                        >
+                            <Select>
+                                <Select.Option value={true} disabled={!editingTwoFactorEnabled}>已启用</Select.Option>
+                                <Select.Option value={false}>未启用</Select.Option>
+                            </Select>
+                        </Form.Item>
+                    )}
                 </Form>
             </Modal>
         </div>

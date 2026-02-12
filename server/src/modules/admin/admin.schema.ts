@@ -13,6 +13,7 @@ export const updateAdminSchema = z.object({
     email: z.string().email().nullable().optional(),
     role: z.enum(['SUPER_ADMIN', 'ADMIN']).optional(),
     status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+    twoFactorEnabled: z.boolean().optional(),
 });
 
 export const listAdminSchema = z.object({

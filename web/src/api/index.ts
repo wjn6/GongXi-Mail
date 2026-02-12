@@ -143,6 +143,30 @@ const appendRequestId = (message: string, requestId?: string): string => {
     return `${message} (requestId: ${requestId})`;
 };
 
+const shouldClearAuthOnUnauthorized = (
+    status: number,
+    payload?: ApiErrorPayload,
+    requestUrl?: string
+): boolean => {
+    if (status !== 401) {
+        return false;
+    }
+
+    const code = String(payload?.error?.code || '').toUpperCase();
+    const normalizedUrl = String(requestUrl || '');
+    const tokenInvalidCodes = new Set(['UNAUTHORIZED', 'INVALID_TOKEN', 'TOKEN_EXPIRED', 'JWT_EXPIRED']);
+
+    if (tokenInvalidCodes.has(code)) {
+        return true;
+    }
+
+    if (normalizedUrl.includes('/admin/auth/me')) {
+        return true;
+    }
+
+    return false;
+};
+
 const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
     if (isObject(payload) && typeof payload.success === 'boolean') {
         const envelope = payload as unknown as ApiSuccessEnvelope<T>;
@@ -209,8 +233,9 @@ api.interceptors.response.use(
             const { status, data } = error.response;
             const headerRequestId = error.response.headers?.['x-request-id'];
             const requestId = data?.requestId || (typeof headerRequestId === 'string' ? headerRequestId : undefined);
+            const requestUrl = error.config?.url;
 
-            if (status === 401) {
+            if (shouldClearAuthOnUnauthorized(status, data, requestUrl)) {
                 // Token 过期或无效，跳转到登录页
                 localStorage.removeItem('token');
                 localStorage.removeItem('admin');
@@ -372,8 +397,8 @@ export const adminApi = {
             { invalidatePrefixes: ['/admin/admins'] }
         ),
 
-    update: (id: number, data: { username?: string; password?: string; email?: string; role?: string; status?: string }) =>
-        requestPut<Record<string, unknown>, { username?: string; password?: string; email?: string; role?: string; status?: string }>(
+    update: (id: number, data: { username?: string; password?: string; email?: string; role?: string; status?: string; twoFactorEnabled?: boolean }) =>
+        requestPut<Record<string, unknown>, { username?: string; password?: string; email?: string; role?: string; status?: string; twoFactorEnabled?: boolean }>(
             `/admin/admins/${id}`,
             data,
             { invalidatePrefixes: ['/admin/admins'] }
