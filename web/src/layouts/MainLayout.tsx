@@ -48,6 +48,8 @@ const MainLayout: React.FC = () => {
     const { token } = theme.useToken();
 
     const hasSuperAdminPermission = isSuperAdmin(admin?.role);
+    const displayName = admin?.username?.trim() || 'Admin';
+    const avatarText = displayName.charAt(0).toUpperCase();
     const menuItems: MenuProps['items'] = menuConfig
         .filter(item => !item.superAdmin || hasSuperAdminPermission)
         .map(item => ({
@@ -179,9 +181,9 @@ const MainLayout: React.FC = () => {
                     <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
                         <Space style={{ cursor: 'pointer' }}>
                             <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
-                                {admin?.username?.charAt(0).toUpperCase()}
+                                {avatarText}
                             </Avatar>
-                            <Text>{admin?.username}</Text>
+                            <Text>{displayName}</Text>
                         </Space>
                     </Dropdown>
                 </Header>

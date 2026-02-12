@@ -24,9 +24,9 @@ const PageFallback: React.FC = () => (
 
 // 路由守卫组件
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, token, admin } = useAuthStore();
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !token || !admin?.username) {
     return <Navigate to="/login" replace />;
   }
 
@@ -35,9 +35,9 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 
 // 超级管理员路由守卫
 const SuperAdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, admin } = useAuthStore();
+  const { isAuthenticated, token, admin } = useAuthStore();
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !token || !admin?.username) {
     return <Navigate to="/login" replace />;
   }
 
