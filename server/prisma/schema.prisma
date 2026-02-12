@@ -17,6 +17,9 @@ model Admin {
   email        String?   @unique @db.VarChar(100)
   role         Role      @default(ADMIN)
   status       Status    @default(ACTIVE)
+  twoFactorEnabled    Boolean   @default(false) @map("two_factor_enabled")
+  twoFactorSecret     String?   @map("two_factor_secret") @db.Text
+  twoFactorTempSecret String?   @map("two_factor_temp_secret") @db.Text
   lastLoginAt  DateTime? @map("last_login_at")
   lastLoginIp  String?   @map("last_login_ip") @db.VarChar(45)
   createdAt    DateTime  @default(now()) @map("created_at")

@@ -1,11 +1,11 @@
 import prisma from '../../lib/prisma.js';
 import { signToken } from '../../lib/jwt.js';
-import { hashPassword, verifyPassword } from '../../lib/crypto.js';
+import { decrypt, encrypt, hashPassword, verifyPassword } from '../../lib/crypto.js';
 import { env } from '../../config/env.js';
 import { getRedis } from '../../lib/redis.js';
 import { AppError } from '../../plugins/error.js';
-import type { LoginInput, ChangePasswordInput } from './auth.schema.js';
-import { createHmac } from 'node:crypto';
+import type { LoginInput, ChangePasswordInput, Verify2FaInput, Disable2FaInput } from './auth.schema.js';
+import { buildTotpUri, generateBase32Secret, verifyTotpCode } from './totp.js';
 
 interface LocalLoginAttemptState {
     count: number;
@@ -130,65 +130,28 @@ async function recordLoginFailure(cacheKey: string): Promise<number> {
     return 0;
 }
 
-function decodeBase32(secret: string): Buffer {
-    const normalized = secret.toUpperCase().replace(/[^A-Z2-7]/g, '');
-    if (!normalized) {
-        throw new Error('Invalid base32 secret');
-    }
-
-    let bits = '';
-    for (const char of normalized) {
-        const value = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(char);
-        if (value < 0) {
-            throw new Error('Invalid base32 character');
-        }
-        bits += value.toString(2).padStart(5, '0');
-    }
-
-    const bytes: number[] = [];
-    for (let i = 0; i + 8 <= bits.length; i += 8) {
-        bytes.push(parseInt(bits.slice(i, i + 8), 2));
-    }
-    return Buffer.from(bytes);
+function isLegacy2FaEnabled(): boolean {
+    return Boolean(env.ADMIN_2FA_SECRET);
 }
 
-function generateTotpCode(secret: Buffer, step: number): string {
-    const counter = Buffer.alloc(8);
-    const high = Math.floor(step / 0x100000000);
-    const low = step >>> 0;
-    counter.writeUInt32BE(high, 0);
-    counter.writeUInt32BE(low, 4);
-
-    const digest = createHmac('sha1', secret).update(counter).digest();
-    const offset = digest[digest.length - 1] & 0x0f;
-    const binary =
-        ((digest[offset] & 0x7f) << 24)
-        | ((digest[offset + 1] & 0xff) << 16)
-        | ((digest[offset + 2] & 0xff) << 8)
-        | (digest[offset + 3] & 0xff);
-    const code = binary % 1_000_000;
-    return code.toString().padStart(6, '0');
-}
-
-function verifyTotpCode(token: string | undefined): boolean {
-    if (!env.ADMIN_2FA_SECRET) {
+function verifyLegacyTotpCode(token: string | undefined): boolean {
+    if (!isLegacy2FaEnabled()) {
         return true;
     }
 
-    if (!token || !/^\d{6}$/.test(token)) {
-        return false;
+    return verifyTotpCode(env.ADMIN_2FA_SECRET!, token, env.ADMIN_2FA_WINDOW);
+}
+
+function decryptAdmin2FaSecret(encryptedSecret: string | null | undefined): string | null {
+    if (!encryptedSecret) {
+        return null;
     }
 
-    const secret = decodeBase32(env.ADMIN_2FA_SECRET);
-    const currentStep = Math.floor(Date.now() / 1000 / 30);
-    const window = env.ADMIN_2FA_WINDOW;
-    for (let offset = -window; offset <= window; offset += 1) {
-        if (generateTotpCode(secret, currentStep + offset) === token) {
-            return true;
-        }
+    try {
+        return decrypt(encryptedSecret);
+    } catch {
+        throw new AppError('TWO_FACTOR_SECRET_INVALID', 'Invalid two-factor configuration', 500);
     }
-
-    return false;
 }
 
 export const authService = {
@@ -212,13 +175,15 @@ export const authService = {
                 passwordHash: true,
                 role: true,
                 status: true,
+                twoFactorEnabled: true,
+                twoFactorSecret: true,
             },
         });
 
         // 管理员不存在，检查是否是默认管理员
         if (!admin) {
             if (username === env.ADMIN_USERNAME && password === env.ADMIN_PASSWORD) {
-                if (!verifyTotpCode(otp)) {
+                if (!verifyLegacyTotpCode(otp)) {
                     const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
                     if (newLockSeconds > 0) {
                         throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
@@ -252,6 +217,7 @@ export const authService = {
                         id: newAdmin.id,
                         username: newAdmin.username,
                         role: newAdmin.role,
+                        twoFactorEnabled: false,
                     },
                 };
             }
@@ -278,8 +244,11 @@ export const authService = {
             throw new AppError('INVALID_CREDENTIALS', 'Invalid username or password', 401);
         }
 
-        // 可选 2FA
-        if (!verifyTotpCode(otp)) {
+        const adminTwoFactorSecret = admin.twoFactorEnabled
+            ? decryptAdmin2FaSecret(admin.twoFactorSecret)
+            : null;
+
+        if (admin.twoFactorEnabled && adminTwoFactorSecret && !verifyTotpCode(adminTwoFactorSecret, otp, env.ADMIN_2FA_WINDOW)) {
             const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
             if (newLockSeconds > 0) {
                 throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
@@ -311,6 +280,7 @@ export const authService = {
                 id: admin.id,
                 username: admin.username,
                 role: admin.role,
+                twoFactorEnabled: admin.twoFactorEnabled,
             },
         };
     },
@@ -358,6 +328,7 @@ export const authService = {
                 id: 0,
                 username: env.ADMIN_USERNAME,
                 role: 'SUPER_ADMIN',
+                twoFactorEnabled: isLegacy2FaEnabled(),
             };
         }
 
@@ -368,6 +339,7 @@ export const authService = {
                 username: true,
                 email: true,
                 role: true,
+                twoFactorEnabled: true,
                 lastLoginAt: true,
                 createdAt: true,
             },
@@ -378,5 +350,170 @@ export const authService = {
         }
 
         return admin;
+    },
+
+    /**
+     * 2FA 状态
+     */
+    async getTwoFactorStatus(adminId: number) {
+        if (adminId === 0) {
+            return {
+                enabled: isLegacy2FaEnabled(),
+                pending: false,
+                legacyEnv: isLegacy2FaEnabled(),
+            };
+        }
+
+        const admin = await prisma.admin.findUnique({
+            where: { id: adminId },
+            select: {
+                id: true,
+                twoFactorEnabled: true,
+                twoFactorTempSecret: true,
+            },
+        });
+
+        if (!admin) {
+            throw new AppError('NOT_FOUND', 'Admin not found', 404);
+        }
+
+        return {
+            enabled: admin.twoFactorEnabled,
+            pending: Boolean(admin.twoFactorTempSecret),
+            legacyEnv: false,
+        };
+    },
+
+    /**
+     * 生成 2FA 绑定信息
+     */
+    async setupTwoFactor(adminId: number) {
+        if (adminId === 0) {
+            throw new AppError('UNSUPPORTED', 'Default admin cannot configure 2FA in UI', 400);
+        }
+
+        const admin = await prisma.admin.findUnique({
+            where: { id: adminId },
+            select: {
+                id: true,
+                username: true,
+                twoFactorEnabled: true,
+            },
+        });
+
+        if (!admin) {
+            throw new AppError('NOT_FOUND', 'Admin not found', 404);
+        }
+
+        if (admin.twoFactorEnabled) {
+            throw new AppError('TWO_FACTOR_ENABLED', 'Two-factor already enabled', 400);
+        }
+
+        const secret = generateBase32Secret();
+        await prisma.admin.update({
+            where: { id: admin.id },
+            data: {
+                twoFactorTempSecret: encrypt(secret),
+            },
+        });
+
+        return {
+            secret,
+            otpauthUrl: buildTotpUri(secret, admin.username, 'GongXi Mail'),
+        };
+    },
+
+    /**
+     * 启用 2FA
+     */
+    async enableTwoFactor(adminId: number, input: Verify2FaInput) {
+        if (adminId === 0) {
+            throw new AppError('UNSUPPORTED', 'Default admin cannot configure 2FA in UI', 400);
+        }
+
+        const admin = await prisma.admin.findUnique({
+            where: { id: adminId },
+            select: {
+                id: true,
+                twoFactorEnabled: true,
+                twoFactorTempSecret: true,
+            },
+        });
+
+        if (!admin) {
+            throw new AppError('NOT_FOUND', 'Admin not found', 404);
+        }
+
+        if (admin.twoFactorEnabled) {
+            return { enabled: true };
+        }
+
+        const tempSecret = decryptAdmin2FaSecret(admin.twoFactorTempSecret);
+        if (!tempSecret) {
+            throw new AppError('TWO_FACTOR_SETUP_REQUIRED', 'Please generate setup secret first', 400);
+        }
+
+        if (!verifyTotpCode(tempSecret, input.otp, env.ADMIN_2FA_WINDOW)) {
+            throw new AppError('INVALID_OTP', 'Invalid two-factor code', 401);
+        }
+
+        await prisma.admin.update({
+            where: { id: admin.id },
+            data: {
+                twoFactorEnabled: true,
+                twoFactorSecret: admin.twoFactorTempSecret,
+                twoFactorTempSecret: null,
+            },
+        });
+
+        return { enabled: true };
+    },
+
+    /**
+     * 禁用 2FA
+     */
+    async disableTwoFactor(adminId: number, input: Disable2FaInput) {
+        if (adminId === 0) {
+            throw new AppError('UNSUPPORTED', 'Default admin cannot disable legacy 2FA in UI', 400);
+        }
+
+        const admin = await prisma.admin.findUnique({
+            where: { id: adminId },
+            select: {
+                id: true,
+                passwordHash: true,
+                twoFactorEnabled: true,
+                twoFactorSecret: true,
+            },
+        });
+
+        if (!admin) {
+            throw new AppError('NOT_FOUND', 'Admin not found', 404);
+        }
+
+        if (!admin.twoFactorEnabled) {
+            return { enabled: false };
+        }
+
+        const isPasswordValid = await verifyPassword(input.password, admin.passwordHash);
+        if (!isPasswordValid) {
+            throw new AppError('INVALID_PASSWORD', 'Invalid password', 400);
+        }
+
+        const secret = decryptAdmin2FaSecret(admin.twoFactorSecret);
+        if (!secret || !verifyTotpCode(secret, input.otp, env.ADMIN_2FA_WINDOW)) {
+            throw new AppError('INVALID_OTP', 'Invalid two-factor code', 401);
+        }
+
+        await prisma.admin.update({
+            where: { id: admin.id },
+            data: {
+                twoFactorEnabled: false,
+                twoFactorSecret: null,
+                twoFactorTempSecret: null,
+            },
+        });
+
+        return { enabled: false };
     },
 };

@@ -6,6 +6,7 @@ interface Admin {
     username: string;
     email?: string;
     role: 'SUPER_ADMIN' | 'ADMIN';
+    twoFactorEnabled?: boolean;
 }
 
 interface AuthState {

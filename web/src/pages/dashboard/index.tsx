@@ -61,12 +61,12 @@ const DashboardPage: React.FC = () => {
     const [trendLoading, setTrendLoading] = useState(true);
     const [chartsReady, setChartsReady] = useState(false);
     const [chartsInView, setChartsInView] = useState(false);
-    const [trendRequested, setTrendRequested] = useState(false);
     const [stats, setStats] = useState<Stats | null>(null);
     const [recentEmails, setRecentEmails] = useState<DashboardEmailItem[]>([]);
     const [recentApiKeys, setRecentApiKeys] = useState<DashboardApiKeyItem[]>([]);
     const [apiTrend, setApiTrend] = useState<ApiTrendItem[]>([]);
     const chartsSectionRef = useRef<HTMLDivElement | null>(null);
+    const trendRequestedRef = useRef(false);
 
     useEffect(() => {
         let disposed = false;
@@ -132,7 +132,8 @@ const DashboardPage: React.FC = () => {
 
     useEffect(() => {
         const target = chartsSectionRef.current;
-        if (!target) {
+        if (!target || typeof IntersectionObserver === 'undefined') {
+            setChartsInView(true);
             return;
         }
 
@@ -151,10 +152,10 @@ const DashboardPage: React.FC = () => {
     }, []);
 
     useEffect(() => {
-        if (!chartsReady || !chartsInView || trendRequested) {
+        if (!chartsReady || !chartsInView || trendRequestedRef.current) {
             return;
         }
-        setTrendRequested(true);
+        trendRequestedRef.current = true;
         let cancelled = false;
 
         const loadTrend = async () => {
@@ -176,7 +177,7 @@ const DashboardPage: React.FC = () => {
         return () => {
             cancelled = true;
         };
-    }, [chartsInView, chartsReady, trendRequested]);
+    }, [chartsInView, chartsReady]);
 
     const emailColumns = [
         {

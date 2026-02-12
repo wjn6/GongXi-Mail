@@ -340,6 +340,18 @@ export const authApi = {
             '/admin/auth/change-password',
             { oldPassword, newPassword }
         ),
+
+    getTwoFactorStatus: () =>
+        requestGet<{ enabled: boolean; pending: boolean; legacyEnv: boolean }>('/admin/auth/2fa/status'),
+
+    setupTwoFactor: () =>
+        requestPost<{ secret: string; otpauthUrl: string }>('/admin/auth/2fa/setup'),
+
+    enableTwoFactor: (otp: string) =>
+        requestPost<{ enabled: boolean }, { otp: string }>('/admin/auth/2fa/enable', { otp }),
+
+    disableTwoFactor: (password: string, otp: string) =>
+        requestPost<{ enabled: boolean }, { password: string; otp: string }>('/admin/auth/2fa/disable', { password, otp }),
 };
 
 // ========================================

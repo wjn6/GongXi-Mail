@@ -1,6 +1,6 @@
 import { type FastifyPluginAsync } from 'fastify';
 import { authService } from './auth.service.js';
-import { loginSchema, changePasswordSchema } from './auth.schema.js';
+import { loginSchema, changePasswordSchema, verify2FaSchema, disable2FaSchema } from './auth.schema.js';
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
     // 登录
@@ -40,6 +40,40 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         const input = changePasswordSchema.parse(request.body);
         await authService.changePassword(request.user!.id, input);
         return { success: true, data: { message: 'Password changed' } };
+    });
+
+    // 2FA 状态
+    fastify.get('/2fa/status', {
+        preHandler: [fastify.authenticateJwt],
+    }, async (request) => {
+        const result = await authService.getTwoFactorStatus(request.user!.id);
+        return { success: true, data: result };
+    });
+
+    // 生成 2FA 绑定信息
+    fastify.post('/2fa/setup', {
+        preHandler: [fastify.authenticateJwt],
+    }, async (request) => {
+        const result = await authService.setupTwoFactor(request.user!.id);
+        return { success: true, data: result };
+    });
+
+    // 启用 2FA
+    fastify.post('/2fa/enable', {
+        preHandler: [fastify.authenticateJwt],
+    }, async (request) => {
+        const input = verify2FaSchema.parse(request.body);
+        const result = await authService.enableTwoFactor(request.user!.id, input);
+        return { success: true, data: result };
+    });
+
+    // 禁用 2FA
+    fastify.post('/2fa/disable', {
+        preHandler: [fastify.authenticateJwt],
+    }, async (request) => {
+        const input = disable2FaSchema.parse(request.body);
+        const result = await authService.disableTwoFactor(request.user!.id, input);
+        return { success: true, data: result };
     });
 };
 
