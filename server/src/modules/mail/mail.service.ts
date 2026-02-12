@@ -9,12 +9,15 @@ import type { MailRequestInput } from './mail.schema.js';
 import Imap from 'node-imap';
 import { simpleParser, type ParsedMail, type Source } from 'mailparser';
 
+type MailFetchStrategy = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY';
+
 interface Credentials {
     id: number;
     email: string;
     clientId: string;
     refreshToken: string;
     autoAssigned: boolean;
+    fetchStrategy?: MailFetchStrategy;
 }
 
 interface EmailMessage {
@@ -122,7 +125,8 @@ export const mailService = {
         emailAccountId: number | undefined,
         requestIp: string,
         responseCode: number,
-        responseTimeMs: number
+        responseTimeMs: number,
+        requestId?: string
     ) {
         try {
             await prisma.apiLog.create({
@@ -133,6 +137,7 @@ export const mailService = {
                     requestIp,
                     responseCode,
                     responseTimeMs,
+                    metadata: requestId ? { requestId } : undefined,
                 },
             });
         } catch (err) {
@@ -449,56 +454,82 @@ export const mailService = {
         options: { mailbox: string; limit?: number; socks5?: string; http?: string }
     ) {
         const proxyConfig = { socks5: options.socks5, http: options.http };
+        const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
+        const limit = options.limit || 100;
 
-        // 1. 尝试 Graph API
-        const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
+        const fetchViaGraph = async () => {
+            const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
+            if (!tokenResult) {
+                throw new AppError('GRAPH_TOKEN_FAILED', 'Failed to get Graph API access token', 502);
+            }
+            if (!tokenResult.hasMailRead) {
+                throw new AppError('GRAPH_SCOPE_MISSING', 'Graph token missing Mail.Read scope', 502);
+            }
 
-        if (tokenResult && tokenResult.hasMailRead) {
-            // Graph API 有权限，使用 Graph API
-            logger.info({ email: credentials.email }, 'Using Graph API for email retrieval');
+            logger.info({ email: credentials.email, strategy }, 'Using Graph API for email retrieval');
+            const messages = await this.getEmailsViaGraphApi(
+                tokenResult.accessToken,
+                options.mailbox,
+                limit,
+                proxyConfig
+            );
+
+            return {
+                email: credentials.email,
+                mailbox: options.mailbox,
+                count: messages.length,
+                messages,
+                method: 'graph_api',
+            };
+        };
+
+        const fetchViaImap = async () => {
+            logger.info({ email: credentials.email, strategy }, 'Using IMAP for email retrieval');
+            const imapToken = await this.getImapAccessToken(credentials, proxyConfig);
+            if (!imapToken) {
+                throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
+            }
+
+            const authString = this.generateAuthString(credentials.email, imapToken);
+            const messages = await this.getEmailsViaImap(
+                credentials.email,
+                authString,
+                options.mailbox,
+                limit
+            );
+
+            return {
+                email: credentials.email,
+                mailbox: options.mailbox,
+                count: messages.length,
+                messages,
+                method: 'imap',
+            };
+        };
+
+        if (strategy === 'GRAPH_ONLY') {
+            return fetchViaGraph();
+        }
+
+        if (strategy === 'IMAP_ONLY') {
+            return fetchViaImap();
+        }
+
+        if (strategy === 'IMAP_FIRST') {
             try {
-                const messages = await this.getEmailsViaGraphApi(
-                    tokenResult.accessToken,
-                    options.mailbox,
-                    options.limit || 100,
-                    proxyConfig
-                );
-
-                return {
-                    email: credentials.email,
-                    mailbox: options.mailbox,
-                    count: messages.length,
-                    messages,
-                    method: 'graph_api',
-                };
-            } catch (graphErr) {
-                logger.warn({ graphErr, email: credentials.email }, 'Graph API failed, trying IMAP fallback');
+                return await fetchViaImap();
+            } catch (imapErr) {
+                logger.warn({ imapErr, email: credentials.email }, 'IMAP failed, fallback to Graph API');
+                return fetchViaGraph();
             }
         }
 
-        // 2. 回退到 IMAP
-        logger.info({ email: credentials.email }, 'Using IMAP fallback for email retrieval');
-        const imapToken = await this.getImapAccessToken(credentials, proxyConfig);
-
-        if (!imapToken) {
-            throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 500);
+        try {
+            return await fetchViaGraph();
+        } catch (graphErr) {
+            logger.warn({ graphErr, email: credentials.email }, 'Graph API failed, fallback to IMAP');
+            return fetchViaImap();
         }
-
-        const authString = this.generateAuthString(credentials.email, imapToken);
-        const messages = await this.getEmailsViaImap(
-            credentials.email,
-            authString,
-            options.mailbox,
-            options.limit || 100
-        );
-
-        return {
-            email: credentials.email,
-            mailbox: options.mailbox,
-            count: messages.length,
-            messages,
-            method: 'imap',
-        };
     },
 
     /**
@@ -508,6 +539,15 @@ export const mailService = {
         credentials: Credentials,
         options: { mailbox: string; socks5?: string; http?: string }
     ) {
+        const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
+        if (strategy === 'IMAP_ONLY') {
+            throw new AppError(
+                'MAILBOX_CLEAR_UNSUPPORTED',
+                'Mailbox clear is not available for IMAP_ONLY strategy',
+                400
+            );
+        }
+
         logger.info({ email: credentials.email, mailbox: options.mailbox }, 'Processing mailbox via Graph API');
 
         const proxyConfig = { socks5: options.socks5, http: options.http };

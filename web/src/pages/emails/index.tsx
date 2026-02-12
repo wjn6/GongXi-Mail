@@ -37,11 +37,27 @@ import dayjs from 'dayjs';
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Dragger } = Upload;
+const MAIL_FETCH_STRATEGY_OPTIONS = [
+    { value: 'GRAPH_FIRST', label: 'Graph 优先（失败回退 IMAP）' },
+    { value: 'IMAP_FIRST', label: 'IMAP 优先（失败回退 Graph）' },
+    { value: 'GRAPH_ONLY', label: '仅 Graph' },
+    { value: 'IMAP_ONLY', label: '仅 IMAP' },
+] as const;
+
+type MailFetchStrategy = (typeof MAIL_FETCH_STRATEGY_OPTIONS)[number]['value'];
+
+const MAIL_FETCH_STRATEGY_LABELS: Record<MailFetchStrategy, string> = {
+    GRAPH_FIRST: 'Graph 优先',
+    IMAP_FIRST: 'IMAP 优先',
+    GRAPH_ONLY: '仅 Graph',
+    IMAP_ONLY: '仅 IMAP',
+};
 
 interface EmailGroup {
     id: number;
     name: string;
     description: string | null;
+    fetchStrategy: MailFetchStrategy;
     emailCount: number;
     createdAt: string;
     updatedAt: string;
@@ -388,12 +404,17 @@ const EmailsPage: React.FC = () => {
     const handleCreateGroup = () => {
         setEditingGroupId(null);
         groupForm.resetFields();
+        groupForm.setFieldsValue({ fetchStrategy: 'GRAPH_FIRST' });
         setGroupModalVisible(true);
     };
 
     const handleEditGroup = useCallback((group: EmailGroup) => {
         setEditingGroupId(group.id);
-        groupForm.setFieldsValue({ name: group.name, description: group.description });
+        groupForm.setFieldsValue({
+            name: group.name,
+            description: group.description,
+            fetchStrategy: group.fetchStrategy,
+        });
         setGroupModalVisible(true);
     }, [groupForm]);
 
@@ -661,6 +682,13 @@ const EmailsPage: React.FC = () => {
             render: (val: string | null) => val || '-',
         },
         {
+            title: '拉取策略',
+            dataIndex: 'fetchStrategy',
+            key: 'fetchStrategy',
+            width: 190,
+            render: (value: MailFetchStrategy) => <Tag color="purple">{MAIL_FETCH_STRATEGY_LABELS[value]}</Tag>,
+        },
+        {
             title: '邮箱数',
             dataIndex: 'emailCount',
             key: 'emailCount',
@@ -769,6 +797,8 @@ const EmailsPage: React.FC = () => {
                                     loading={loading}
                                     rowSelection={rowSelection}
                                     pagination={tablePagination}
+                                    virtual
+                                    scroll={{ y: 560, x: 1200 }}
                                 />
                             </>
                         ),
@@ -1016,7 +1046,7 @@ const EmailsPage: React.FC = () => {
                 onOk={handleGroupSubmit}
                 onCancel={() => setGroupModalVisible(false)}
                 destroyOnClose
-                width={400}
+                width={460}
             >
                 <Form form={groupForm} layout="vertical">
                     <Form.Item name="name" label="分组名称" rules={[{ required: true, message: '请输入分组名称' }]}>
@@ -1024,6 +1054,13 @@ const EmailsPage: React.FC = () => {
                     </Form.Item>
                     <Form.Item name="description" label="描述">
                         <Input placeholder="可选描述" />
+                    </Form.Item>
+                    <Form.Item
+                        name="fetchStrategy"
+                        label="邮件拉取策略"
+                        rules={[{ required: true, message: '请选择拉取策略' }]}
+                    >
+                        <Select options={MAIL_FETCH_STRATEGY_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} />
                     </Form.Item>
                 </Form>
             </Modal>

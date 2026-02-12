@@ -23,6 +23,7 @@ interface ApiSuccessEnvelope<T = unknown> {
 
 interface ApiErrorPayload {
     message?: string;
+    requestId?: string;
     error?: {
         code?: string | number;
         message?: string;
@@ -61,6 +62,8 @@ const api = axios.create({
 
 const pendingGetControllers = new Map<string, AbortController>();
 const getResponseCache = new Map<string, { expiresAt: number; value: ApiResponse<unknown> }>();
+
+const REQUEST_ID_HEADER = 'X-Request-Id';
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null;
@@ -131,6 +134,15 @@ const formatApiErrorMessage = (fallbackMessage: string, payload?: ApiErrorPayloa
     return `${baseMessage}: ${detailMessage}`;
 };
 
+const createClientRequestId = (): string => `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const appendRequestId = (message: string, requestId?: string): string => {
+    if (!requestId) {
+        return message;
+    }
+    return `${message} (requestId: ${requestId})`;
+};
+
 const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
     if (isObject(payload) && typeof payload.success === 'boolean') {
         const envelope = payload as unknown as ApiSuccessEnvelope<T>;
@@ -165,9 +177,13 @@ const toApiResponse = <T>(payload: unknown): ApiResponse<T> => {
 // 请求拦截器
 api.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
+        const headers = config.headers as Record<string, string>;
         const token = localStorage.getItem('token');
-        if (token && config.headers) {
-            (config.headers as Record<string, string>).Authorization = `Bearer ${token}`;
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
+        if (!headers[REQUEST_ID_HEADER] && !headers['x-request-id']) {
+            headers[REQUEST_ID_HEADER] = createClientRequestId();
         }
         return config;
     },
@@ -191,6 +207,8 @@ api.interceptors.response.use(
 
         if (error.response) {
             const { status, data } = error.response;
+            const headerRequestId = error.response.headers?.['x-request-id'];
+            const requestId = data?.requestId || (typeof headerRequestId === 'string' ? headerRequestId : undefined);
 
             if (status === 401) {
                 // Token 过期或无效，跳转到登录页
@@ -203,14 +221,16 @@ api.interceptors.response.use(
             if (data?.error) {
                 return Promise.reject({
                     code: data.error.code || status,
-                    message: formatApiErrorMessage('Request failed', data),
+                    message: appendRequestId(formatApiErrorMessage('Request failed', data), requestId),
                     details: data.error.details,
+                    requestId,
                 });
             }
 
             return Promise.reject({
                 code: status,
-                message: formatApiErrorMessage('Request failed', data),
+                message: appendRequestId(formatApiErrorMessage('Request failed', data), requestId),
+                requestId,
             });
         }
 
@@ -303,10 +323,10 @@ const requestDelete = <T>(url: string, config?: MutationConfig): ApiResult<T> =>
 // ========================================
 
 export const authApi = {
-    login: (username: string, password: string) =>
-        requestPost<{ token: string; admin: Record<string, unknown> }, { username: string; password: string }>(
+    login: (username: string, password: string, otp?: string) =>
+        requestPost<{ token: string; admin: Record<string, unknown> }, { username: string; password: string; otp?: string }>(
             '/admin/auth/login',
-            { username, password }
+            { username, password, otp }
         ),
 
     logout: () =>
@@ -479,15 +499,15 @@ export const groupApi = {
     getById: (id: number) =>
         requestGet<Record<string, unknown>>(`/admin/email-groups/${id}`),
 
-    create: (data: { name: string; description?: string }) =>
-        requestPost<Record<string, unknown>, { name: string; description?: string }>(
+    create: (data: { name: string; description?: string; fetchStrategy: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }) =>
+        requestPost<Record<string, unknown>, { name: string; description?: string; fetchStrategy: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }>(
             '/admin/email-groups',
             data,
             { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }
         ),
 
-    update: (id: number, data: { name?: string; description?: string }) =>
-        requestPut<Record<string, unknown>, { name?: string; description?: string }>(
+    update: (id: number, data: { name?: string; description?: string; fetchStrategy?: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }) =>
+        requestPut<Record<string, unknown>, { name?: string; description?: string; fetchStrategy?: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }>(
             `/admin/email-groups/${id}`,
             data,
             { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }

@@ -82,6 +82,12 @@ npm run test
 | ENCRYPTION_KEY | 加密密钥 (32字符) | - |
 | ADMIN_USERNAME | 默认管理员用户名 | admin |
 | ADMIN_PASSWORD | 默认管理员密码（生产禁止使用默认值） | - |
+| ADMIN_LOGIN_MAX_ATTEMPTS | 管理员连续失败最大次数 | 5 |
+| ADMIN_LOGIN_LOCK_MINUTES | 登录失败锁定分钟数 | 15 |
+| ADMIN_2FA_SECRET | 可选管理员 TOTP Base32 密钥 | - |
+| ADMIN_2FA_WINDOW | TOTP 时间窗口（步长） | 1 |
+| API_LOG_RETENTION_DAYS | API 日志保留天数 | 30 |
+| API_LOG_CLEANUP_INTERVAL_MINUTES | API 日志清理间隔（分钟） | 60 |
 
 ## 枚举约定
 
@@ -91,6 +97,19 @@ npm run test
 |------|--------|
 | 管理员角色 | `SUPER_ADMIN` / `ADMIN` |
 | 管理员/API Key 状态 | `ACTIVE` / `DISABLED` |
+
+## 邮件拉取策略（分组级）
+
+邮箱分组支持配置 `fetchStrategy`，同组邮箱统一使用该策略：
+
+| 策略 | 行为 |
+|------|------|
+| `GRAPH_FIRST` | 先 Graph，失败后回退 IMAP |
+| `IMAP_FIRST` | 先 IMAP，失败后回退 Graph |
+| `GRAPH_ONLY` | 仅 Graph，不回退 |
+| `IMAP_ONLY` | 仅 IMAP，不回退 |
+
+说明：`IMAP_ONLY` 不支持“清空邮箱（process-mailbox）”，该操作依赖 Graph API。
 
 ## API 文档
 
@@ -170,10 +189,12 @@ API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`�
 ## 生产配置要求
 
 - `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 必须通过外部环境变量注入。
+- 如启用 2FA，`ADMIN_2FA_SECRET` 也必须通过外部环境变量注入。
 - 不要在 `docker-compose.yml`、`.env`、代码仓库中写死生产密钥。
 - `server/.env.example` 仅作为模板，不能直接用于生产。
 - 如需跨域访问，配置 `CORS_ORIGIN`（如 `https://admin.example.com,https://ops.example.com`）。
 - 生产模式会在启动时对前端静态资源生成 `.gz/.br` 预压缩文件，并优先下发压缩版本。
+- 服务会按 `API_LOG_RETENTION_DAYS` 与 `API_LOG_CLEANUP_INTERVAL_MINUTES` 自动清理历史 API 日志。
 
 ## License
 

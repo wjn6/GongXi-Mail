@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Form, Input, Button, Card, Typography, message } from 'antd';
-import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { UserOutlined, LockOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { authApi } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
 import { requestData } from '../../utils/request';
@@ -11,6 +11,7 @@ const { Title, Text } = Typography;
 interface LoginForm {
     username: string;
     password: string;
+    otp?: string;
 }
 
 const LoginPage: React.FC = () => {
@@ -21,7 +22,7 @@ const LoginPage: React.FC = () => {
     const handleSubmit = async (values: LoginForm) => {
         setLoading(true);
         const result = await requestData<{ token: string; admin: { id: number; username: string; email?: string; role: 'SUPER_ADMIN' | 'ADMIN' } }>(
-            () => authApi.login(values.username, values.password),
+            () => authApi.login(values.username, values.password, values.otp?.trim() || undefined),
             '登录失败'
         );
         if (result) {
@@ -77,6 +78,22 @@ const LoginPage: React.FC = () => {
                         <Input.Password
                             prefix={<LockOutlined />}
                             placeholder="密码"
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="otp"
+                        rules={[
+                            {
+                                pattern: /^\d{6}$/,
+                                message: '请输入 6 位验证码',
+                            },
+                        ]}
+                    >
+                        <Input
+                            prefix={<SafetyCertificateOutlined />}
+                            placeholder="二次验证码（可选，6 位数字）"
+                            maxLength={6}
                         />
                     </Form.Item>
 

@@ -32,6 +32,7 @@ import {
     ReloadOutlined,
     DatabaseOutlined,
     ThunderboltOutlined,
+    SearchOutlined,
 } from '@ant-design/icons';
 import { apiKeyApi, groupApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
@@ -100,6 +101,7 @@ const ApiKeysPage: React.FC = () => {
     const [currentApiKey, setCurrentApiKey] = useState<ApiKey | null>(null);
     const [emailList, setEmailList] = useState<PoolEmailItem[]>([]);
     const [selectedEmails, setSelectedEmails] = useState<number[]>([]);
+    const [emailKeyword, setEmailKeyword] = useState('');
     const [emailModalVisible, setEmailModalVisible] = useState(false);
     const [emailLoading, setEmailLoading] = useState(false);
     const [savingEmails, setSavingEmails] = useState(false);
@@ -333,6 +335,7 @@ const ApiKeysPage: React.FC = () => {
                 const emails = res.data;
                 setEmailList(emails);
                 setSelectedEmails(extractUsedEmailIds(emails));
+                setEmailKeyword('');
             }
         } catch {
             message.error('获取邮箱列表失败');
@@ -351,6 +354,7 @@ const ApiKeysPage: React.FC = () => {
                 const emails = res.data;
                 setEmailList(emails);
                 setSelectedEmails(extractUsedEmailIds(emails));
+                setEmailKeyword('');
             }
         } catch {
             message.error('获取邮箱列表失败');
@@ -523,6 +527,29 @@ const ApiKeysPage: React.FC = () => {
         [groups]
     );
 
+    const filteredEmailList = useMemo(() => {
+        const keyword = emailKeyword.trim().toLowerCase();
+        if (!keyword) {
+            return emailList;
+        }
+
+        return emailList.filter((item) => {
+            const emailText = item.email.toLowerCase();
+            const groupText = item.groupName?.toLowerCase() || '';
+            return emailText.includes(keyword) || groupText.includes(keyword);
+        });
+    }, [emailKeyword, emailList]);
+
+    const filteredEmailIdSet = useMemo(
+        () => new Set(filteredEmailList.map((item) => item.id)),
+        [filteredEmailList]
+    );
+
+    const selectedInFilteredCount = useMemo(
+        () => selectedEmails.filter((id) => filteredEmailIdSet.has(id)).length,
+        [filteredEmailIdSet, selectedEmails]
+    );
+
     return (
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -545,6 +572,8 @@ const ApiKeysPage: React.FC = () => {
                 rowKey="id"
                 loading={loading}
                 pagination={tablePagination}
+                virtual
+                scroll={{ y: 560, x: 1200 }}
             />
 
             {/* 创建/编辑弹窗 */}
@@ -786,6 +815,15 @@ const ApiKeysPage: React.FC = () => {
                                 </Space>
                             </div>
                             <div style={{ marginBottom: 16 }}>
+                                <Input
+                                    allowClear
+                                    value={emailKeyword}
+                                    onChange={(event) => setEmailKeyword(event.target.value)}
+                                    prefix={<SearchOutlined />}
+                                    placeholder="搜索邮箱或分组"
+                                />
+                            </div>
+                            <div style={{ marginBottom: 16 }}>
                                 <Text type="secondary">
                                     勾选的邮箱表示该 API Key 已使用过（不会再自动分配）
                                 </Text>
@@ -794,18 +832,26 @@ const ApiKeysPage: React.FC = () => {
                                 <Space>
                                     <Button
                                         size="small"
-                                        onClick={() => setSelectedEmails(emailList.map(e => e.id))}
+                                        onClick={() => {
+                                            setSelectedEmails((prev) => Array.from(new Set([
+                                                ...prev,
+                                                ...filteredEmailList.map((item) => item.id),
+                                            ])));
+                                        }}
                                     >
-                                        全选
+                                        全选当前筛选
                                     </Button>
                                     <Button
                                         size="small"
-                                        onClick={() => setSelectedEmails([])}
+                                        onClick={() => {
+                                            setSelectedEmails((prev) => prev.filter((id) => !filteredEmailIdSet.has(id)));
+                                        }}
                                     >
-                                        取消全选
+                                        清空当前筛选
                                     </Button>
                                     <Text type="secondary">
                                         已选择 {selectedEmails.length} / {emailList.length}
+                                        {`（当前筛选 ${selectedInFilteredCount} / ${filteredEmailList.length}）`}
                                     </Text>
                                 </Space>
                             </div>
@@ -816,7 +862,7 @@ const ApiKeysPage: React.FC = () => {
                                     style={{ width: '100%' }}
                                 >
                                     <Row>
-                                        {emailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
+                                        {filteredEmailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
                                             <Col span={12} key={email.id} style={{ marginBottom: 8 }}>
                                                 <Checkbox value={email.id}>
                                                     {email.email}

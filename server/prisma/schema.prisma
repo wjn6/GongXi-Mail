@@ -59,6 +59,7 @@ model EmailGroup {
   id          Int      @id @default(autoincrement())
   name        String   @unique @db.VarChar(50)
   description String?  @db.VarChar(255)
+  fetchStrategy MailFetchStrategy @default(GRAPH_FIRST) @map("fetch_strategy")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -126,6 +127,7 @@ model ApiLog {
   @@index([apiKeyId])
   @@index([emailAccountId])
   @@index([createdAt])
+  @@index([action, createdAt])
   @@map("api_logs")
 }
 
@@ -146,4 +148,11 @@ enum EmailStatus {
   ACTIVE
   ERROR
   DISABLED
+}
+
+enum MailFetchStrategy {
+  GRAPH_FIRST
+  IMAP_FIRST
+  GRAPH_ONLY
+  IMAP_ONLY
 }

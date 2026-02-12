@@ -25,6 +25,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export async function buildApp() {
     const fastify = Fastify({
+        requestIdHeader: 'x-request-id',
+        requestIdLogLabel: 'requestId',
         logger: env.NODE_ENV === 'development' ? {
             transport: {
                 target: 'pino-pretty',
@@ -56,6 +58,10 @@ export async function buildApp() {
     // 自定义插件
     await fastify.register(errorPlugin);
     await fastify.register(authPlugin);
+
+    fastify.addHook('onRequest', async (request, reply) => {
+        reply.header('x-request-id', request.id);
+    });
 
     // 健康检查
     fastify.get('/health', async () => {
@@ -108,6 +114,7 @@ export async function buildApp() {
         if (isApiOrAdminPath(path)) {
             return reply.status(404).send({
                 success: false,
+                requestId: request.id,
                 error: { code: 'NOT_FOUND', message: 'Route not found' },
             });
         }
@@ -116,6 +123,7 @@ export async function buildApp() {
         if (!shouldServeSpaIndex({ method: request.method, path, accept: accepts })) {
             return reply.status(404).send({
                 success: false,
+                requestId: request.id,
                 error: { code: 'NOT_FOUND', message: 'Route not found' },
             });
         }

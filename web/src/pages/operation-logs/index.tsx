@@ -16,6 +16,7 @@ interface LogItem {
     apiKeyName: string;
     email: string;
     requestIp: string;
+    requestId: string | null;
     responseCode: number;
     responseTimeMs: number;
     createdAt: string;
@@ -103,6 +104,13 @@ const OperationLogsPage: React.FC = () => {
             dataIndex: 'requestIp',
             key: 'requestIp',
             width: 140,
+        },
+        {
+            title: 'Request ID',
+            dataIndex: 'requestId',
+            key: 'requestId',
+            width: 220,
+            render: (requestId: string | null) => requestId ? <Text copyable>{requestId}</Text> : <Text type="secondary">-</Text>,
         },
     ];
 

@@ -7,6 +7,7 @@ export function getErrorMessage(error: unknown, fallback: string): string {
         code?: unknown;
         message?: unknown;
         details?: unknown;
+        requestId?: unknown;
     };
     const message = typeof payload.message === 'string' ? payload.message.trim() : '';
     const code = payload.code;
@@ -34,10 +35,13 @@ export function getErrorMessage(error: unknown, fallback: string): string {
     const finalMessage = detailText
         ? `${message || fallback}: ${detailText}`
         : (message || fallback);
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+    const hasRequestIdText = finalMessage.includes('requestId:');
+    const withRequestId = requestId && !hasRequestIdText ? `${finalMessage} (requestId: ${requestId})` : finalMessage;
 
     if (!codeText) {
-        return finalMessage;
+        return withRequestId;
     }
 
-    return `[${codeText}] ${finalMessage}`;
+    return `[${codeText}] ${withRequestId}`;
 }

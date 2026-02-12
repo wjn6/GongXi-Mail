@@ -7,6 +7,7 @@ import { z } from 'zod';
 export const loginSchema = z.object({
     username: z.string().min(1, 'Username is required'),
     password: z.string().min(1, 'Password is required'),
+    otp: z.string().regex(/^\d{6}$/, 'OTP must be 6 digits').optional(),
 });
 
 export const changePasswordSchema = z.object({

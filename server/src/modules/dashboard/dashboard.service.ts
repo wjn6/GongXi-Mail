@@ -1,6 +1,14 @@
 import prisma from '../../lib/prisma.js';
 import type { Prisma } from '@prisma/client';
 
+function extractRequestIdFromMetadata(metadata: Prisma.JsonValue | null): string | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        return null;
+    }
+    const requestId = (metadata as Record<string, unknown>).requestId;
+    return typeof requestId === 'string' && requestId.trim() ? requestId : null;
+}
+
 export const dashboardService = {
     /**
      * 获取统计数据
@@ -101,6 +109,7 @@ export const dashboardService = {
                     requestIp: true,
                     responseCode: true,
                     responseTimeMs: true,
+                    metadata: true,
                     createdAt: true,
                     apiKey: { select: { name: true } },
                     emailAccount: { select: { email: true } },
@@ -120,6 +129,7 @@ export const dashboardService = {
             requestIp: log.requestIp,
             responseCode: log.responseCode,
             responseTimeMs: log.responseTimeMs,
+            requestId: extractRequestIdFromMetadata(log.metadata),
             createdAt: log.createdAt,
         }));
 

@@ -90,7 +90,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                         email.id,
                         request.ip,
                         200,
-                        Date.now() - startTime
+                        Date.now() - startTime,
+                        request.id
                     );
                     return {
                         success: true,
@@ -115,7 +116,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 getErrorStatusCode(err),
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -147,6 +149,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailAccount.clientId,
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailAccount.fetchStrategy,
         };
 
         try {
@@ -165,7 +168,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return {
@@ -181,7 +185,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 500,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -211,7 +216,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 statusCode,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             reply.code(statusCode).type('text/plain').send(`Error: ${message}`);
             return;
@@ -229,6 +235,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailAccount.clientId,
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailAccount.fetchStrategy,
         };
 
         try {
@@ -244,7 +251,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             if (!result.messages || result.messages.length === 0) {
@@ -284,7 +292,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 500,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             reply.code(500).type('text/plain').send(`Error: ${getErrorMessage(err)}`);
         }
@@ -315,6 +324,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailAccount.clientId,
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailAccount.fetchStrategy,
         };
 
         try {
@@ -332,7 +342,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return {
@@ -348,7 +359,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 500,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -379,6 +391,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailAccount.clientId,
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailAccount.fetchStrategy,
         };
 
         try {
@@ -396,7 +409,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return {
@@ -412,7 +426,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 credentials.id,
                 request.ip,
                 500,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -444,7 +459,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return {
@@ -461,7 +477,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 getErrorStatusCode(err),
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -486,7 +503,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return { success: true, data: stats };
@@ -497,7 +515,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 getErrorStatusCode(err),
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }
@@ -522,7 +541,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 200,
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
 
             return { success: true, data: { message: `Pool reset successfully${groupName ? ` for group '${groupName}'` : ''}` } };
@@ -533,7 +553,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 undefined,
                 request.ip,
                 getErrorStatusCode(err),
-                Date.now() - startTime
+                Date.now() - startTime,
+                request.id
             );
             throw err;
         }

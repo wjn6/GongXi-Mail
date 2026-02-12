@@ -16,12 +16,13 @@ export class AppError extends Error {
 
 const errorPlugin: FastifyPluginAsync = async (fastify) => {
     fastify.setErrorHandler((error: FastifyError | AppError | ZodError, request: FastifyRequest, reply: FastifyReply) => {
-        logger.error({ err: error, path: request.url, method: request.method }, 'Request error');
+        logger.error({ err: error, path: request.url, method: request.method, requestId: request.id }, 'Request error');
 
         // Zod 验证错误
         if (error instanceof ZodError) {
             return reply.status(400).send({
                 success: false,
+                requestId: request.id,
                 error: {
                     code: 'VALIDATION_ERROR',
                     message: 'Invalid request data',
@@ -34,6 +35,7 @@ const errorPlugin: FastifyPluginAsync = async (fastify) => {
         if (error instanceof AppError) {
             return reply.status(error.statusCode).send({
                 success: false,
+                requestId: request.id,
                 error: {
                     code: error.code,
                     message: error.message,
@@ -45,6 +47,7 @@ const errorPlugin: FastifyPluginAsync = async (fastify) => {
         if (error.validation) {
             return reply.status(400).send({
                 success: false,
+                requestId: request.id,
                 error: {
                     code: 'VALIDATION_ERROR',
                     message: error.message,
@@ -56,6 +59,7 @@ const errorPlugin: FastifyPluginAsync = async (fastify) => {
         const statusCode = error.statusCode || 500;
         return reply.status(statusCode).send({
             success: false,
+            requestId: request.id,
             error: {
                 code: 'INTERNAL_ERROR',
                 message: statusCode === 500 ? 'Internal server error' : error.message,

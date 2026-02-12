@@ -85,6 +85,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailData.clientId,
             refreshToken: emailData.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailData.group?.fetchStrategy,
         };
 
         const mails = await mailService.getEmails(credentials, { mailbox: mailbox || 'INBOX' });
@@ -104,6 +105,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             clientId: emailData.clientId,
             refreshToken: emailData.refreshToken!,
             autoAssigned: false,
+            fetchStrategy: emailData.group?.fetchStrategy,
         };
 
         const result = await mailService.processMailbox(credentials, { mailbox: mailbox || 'INBOX' });

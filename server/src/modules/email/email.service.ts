@@ -30,13 +30,13 @@ export const emailService = {
                     id: true,
                     email: true,
                     clientId: true,
-                    status: true,
-                    groupId: true,
-                    group: { select: { id: true, name: true } },
-                    lastCheckAt: true,
-                    errorMessage: true,
-                    createdAt: true,
-                },
+                status: true,
+                groupId: true,
+                group: { select: { id: true, name: true, fetchStrategy: true } },
+                lastCheckAt: true,
+                errorMessage: true,
+                createdAt: true,
+            },
                 skip,
                 take: pageSize,
                 orderBy: { id: 'desc' },
@@ -61,7 +61,7 @@ export const emailService = {
                 refreshToken: !!includeSecrets,
                 status: true,
                 groupId: true,
-                group: { select: { id: true, name: true } },
+                group: { select: { id: true, name: true, fetchStrategy: true } },
                 lastCheckAt: true,
                 errorMessage: true,
                 createdAt: true,
@@ -98,6 +98,11 @@ export const emailService = {
                 refreshToken: true,
                 password: true,
                 status: true,
+                group: {
+                    select: {
+                        fetchStrategy: true,
+                    },
+                },
             },
         });
 
@@ -110,6 +115,7 @@ export const emailService = {
             ...email,
             refreshToken: decrypt(email.refreshToken),
             password: email.password ? decrypt(email.password) : undefined,
+            fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };
     },
 

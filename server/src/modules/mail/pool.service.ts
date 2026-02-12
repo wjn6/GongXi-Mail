@@ -48,6 +48,11 @@ export const poolService = {
                 email: true,
                 clientId: true,
                 refreshToken: true,
+                group: {
+                    select: {
+                        fetchStrategy: true,
+                    },
+                },
             },
             orderBy: { id: 'asc' },
         });
@@ -59,6 +64,7 @@ export const poolService = {
         return {
             ...email,
             refreshToken: decrypt(email.refreshToken),
+            fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };
     },
 
@@ -218,35 +224,61 @@ export const poolService = {
      * 更新邮箱使用状态 (Admin 用)
      */
     async updateEmailUsage(apiKeyId: number, emailIds: number[], groupId?: number) {
-        if (groupId !== undefined) {
-            const group = await prisma.emailGroup.findUnique({
-                where: { id: groupId },
-                select: { id: true },
-            });
-            if (!group) {
-                throw new AppError('GROUP_NOT_FOUND', 'Email group not found', 404);
+        return prisma.$transaction(async (tx) => {
+            let scopedEmailIds: number[] | undefined;
+
+            if (groupId !== undefined) {
+                const group = await tx.emailGroup.findUnique({
+                    where: { id: groupId },
+                    select: { id: true },
+                });
+                if (!group) {
+                    throw new AppError('GROUP_NOT_FOUND', 'Email group not found', 404);
+                }
+
+                scopedEmailIds = (await tx.emailAccount.findMany({
+                    where: { groupId },
+                    select: { id: true },
+                })).map((item: { id: number }) => item.id);
             }
 
-            const scopedEmailIds = (await prisma.emailAccount.findMany({
-                where: { groupId },
-                select: { id: true },
-            })).map((item: { id: number }) => item.id);
-
-            const scopedEmailIdSet = new Set(scopedEmailIds);
+            const scopedEmailIdSet = scopedEmailIds ? new Set(scopedEmailIds) : undefined;
             const nextEmailIds = Array.from(
-                new Set(emailIds.filter((id: number) => scopedEmailIdSet.has(id)))
+                new Set(
+                    emailIds.filter((id: number) => !scopedEmailIdSet || scopedEmailIdSet.has(id))
+                )
             );
 
-            await prisma.emailUsage.deleteMany({
+            const existingUsages = await tx.emailUsage.findMany({
                 where: {
                     apiKeyId,
-                    emailAccountId: { in: scopedEmailIds },
+                    ...(scopedEmailIds
+                        ? { emailAccountId: { in: scopedEmailIds } }
+                        : {}),
                 },
+                select: { emailAccountId: true },
             });
 
-            if (nextEmailIds.length > 0) {
-                await prisma.emailUsage.createMany({
-                    data: nextEmailIds.map((emailAccountId: number) => ({
+            const existingIdSet = new Set(existingUsages.map((usage: { emailAccountId: number }) => usage.emailAccountId));
+            const nextIdSet = new Set(nextEmailIds);
+
+            const toAdd = nextEmailIds.filter((id: number) => !existingIdSet.has(id));
+            const toRemove = existingUsages
+                .map((usage: { emailAccountId: number }) => usage.emailAccountId)
+                .filter((id: number) => !nextIdSet.has(id));
+
+            if (toRemove.length > 0) {
+                await tx.emailUsage.deleteMany({
+                    where: {
+                        apiKeyId,
+                        emailAccountId: { in: toRemove },
+                    },
+                });
+            }
+
+            if (toAdd.length > 0) {
+                await tx.emailUsage.createMany({
+                    data: toAdd.map((emailAccountId: number) => ({
                         apiKeyId,
                         emailAccountId,
                     })),
@@ -254,22 +286,12 @@ export const poolService = {
                 });
             }
 
-            return { success: true, count: nextEmailIds.length };
-        }
-
-        const nextEmailIds = Array.from(new Set(emailIds));
-        await prisma.emailUsage.deleteMany({ where: { apiKeyId } });
-
-        if (nextEmailIds.length > 0) {
-            await prisma.emailUsage.createMany({
-                data: nextEmailIds.map((emailAccountId: number) => ({
-                    apiKeyId,
-                    emailAccountId,
-                })),
-                skipDuplicates: true,
-            });
-        }
-
-        return { success: true, count: nextEmailIds.length };
+            return {
+                success: true,
+                count: nextEmailIds.length,
+                added: toAdd.length,
+                removed: toRemove.length,
+            };
+        });
     },
 };
