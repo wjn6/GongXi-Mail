@@ -65,6 +65,7 @@ cd ../server
 npm run lint
 npm run lint:fix
 npm run build
+npm run test
 ```
 
 ## 环境变量

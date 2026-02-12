@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
 import errorPlugin from './plugins/error.js';
 import authPlugin from './plugins/auth.js';
+import { isApiOrAdminPath, shouldServeSpaIndex } from './lib/http.js';
 
 // Routes
 import authRoutes from './modules/auth/auth.routes.js';
@@ -86,23 +87,18 @@ export async function buildApp() {
     // SPA fallback - 现在可以安全使用 setNotFoundHandler
     fastify.setNotFoundHandler(async (request, reply) => {
         const path = request.url.split('?')[0];
-        const method = request.method.toUpperCase();
-        const accept = (request.headers.accept || '').toLowerCase();
-        const isApiPath = path === '/api' || path.startsWith('/api/');
-        const isAdminPath = path === '/admin' || path.startsWith('/admin/');
-        const isAssetPath = /\.[^/]+$/.test(path);
-        const wantsJson = accept.includes('application/json');
+        const accepts = request.headers.accept;
 
         // 如果是 API 路由，返回 404 JSON
-        if (isApiPath || isAdminPath) {
+        if (isApiOrAdminPath(path)) {
             return reply.status(404).send({
                 success: false,
                 error: { code: 'NOT_FOUND', message: 'Route not found' },
             });
         }
 
-        // 非页面请求或静态资源不存在，返回 404 JSON
-        if (!['GET', 'HEAD'].includes(method) || isAssetPath || wantsJson) {
+        // 非页面请求，返回 404 JSON
+        if (!shouldServeSpaIndex({ method: request.method, path, accept: accepts })) {
             return reply.status(404).send({
                 success: false,
                 error: { code: 'NOT_FOUND', message: 'Route not found' },

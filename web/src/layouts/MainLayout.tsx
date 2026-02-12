@@ -147,7 +147,7 @@ const MainLayout: React.FC = () => {
                 />
             </Sider>
 
-            <Layout style={{ marginLeft: collapsed ? 80 : 208, transition: 'all 0.2s' }}>
+            <Layout style={{ marginLeft: collapsed ? 80 : 208, transition: 'margin-left 0.2s ease' }}>
                 <Header
                     style={{
                         padding: '0 24px',

@@ -6,6 +6,8 @@ import prisma from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
 import { AppError } from './error.js';
 
+export type ApiPermissions = Record<string, boolean>;
+
 declare module 'fastify' {
     interface FastifyRequest {
         user?: {
@@ -17,6 +19,7 @@ declare module 'fastify' {
             id: number;
             name: string;
             rateLimit: number;
+            permissions?: ApiPermissions;
         };
     }
 }
@@ -63,6 +66,58 @@ function extractApiKey(request: FastifyRequest): string | null {
     }
 
     return null;
+}
+
+function normalizeApiPermissionKey(key: string): string {
+    return key.trim().toLowerCase().replace(/-/g, '_');
+}
+
+function parseApiPermissions(value: unknown): ApiPermissions | undefined {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>)
+        .filter(([, permissionValue]) => typeof permissionValue === 'boolean')
+        .map(([permissionKey, permissionValue]) => [normalizeApiPermissionKey(permissionKey), permissionValue as boolean]);
+
+    if (entries.length === 0) {
+        return undefined;
+    }
+
+    return Object.fromEntries(entries);
+}
+
+export function isApiPermissionAllowed(permissions: ApiPermissions | undefined, action: string): boolean {
+    if (!permissions || Object.keys(permissions).length === 0) {
+        return true;
+    }
+
+    const actionKey = normalizeApiPermissionKey(action);
+    const wildcardKeys = ['*', 'all', '__all__'];
+
+    for (const wildcardKey of wildcardKeys) {
+        if (permissions[wildcardKey] === true) {
+            return true;
+        }
+    }
+
+    if (permissions[actionKey] === true) {
+        return true;
+    }
+    if (permissions[actionKey] === false) {
+        return false;
+    }
+
+    const legacyKey = actionKey.replace(/_/g, '-');
+    if (permissions[legacyKey] === true) {
+        return true;
+    }
+    if (permissions[legacyKey] === false) {
+        return false;
+    }
+
+    return false;
 }
 
 const localRateLimitStore = new Map<number, { count: number; resetAt: number }>();
@@ -156,6 +211,7 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
                 rateLimit: true,
                 status: true,
                 expiresAt: true,
+                permissions: true,
             },
         });
 
@@ -187,7 +243,18 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
             id: apiKey.id,
             name: apiKey.name,
             rateLimit: apiKey.rateLimit,
+            permissions: parseApiPermissions(apiKey.permissions),
         };
+    });
+
+    fastify.decorate('assertApiPermission', (request: FastifyRequest, action: string) => {
+        if (!request.apiKey) {
+            throw new AppError('UNAUTHORIZED', 'API Key required', 401);
+        }
+
+        if (!isApiPermissionAllowed(request.apiKey.permissions, action)) {
+            throw new AppError('FORBIDDEN_PERMISSION', `API Key has no permission for action: ${action}`, 403);
+        }
     });
 
     /**
@@ -209,6 +276,7 @@ declare module 'fastify' {
         authenticateJwt: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
         authenticateApiKey: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
         requireSuperAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+        assertApiPermission: (request: FastifyRequest, action: string) => void;
     }
 }
 

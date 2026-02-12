@@ -66,6 +66,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             if (!request.apiKey?.id) {
                 throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
             }
+            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.GET_EMAIL);
 
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
 
@@ -132,6 +133,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!request.apiKey?.id) {
             throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
         }
+        fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.MAIL_NEW);
 
         // 查找邮箱
         const emailAccount = await emailService.getByEmail(input.email);
@@ -196,6 +198,22 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (!request.apiKey?.id) {
             reply.code(401).type('text/plain').send('Error: API Key required');
+            return;
+        }
+        try {
+            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.MAIL_TEXT);
+        } catch (err: unknown) {
+            const message = getErrorMessage(err);
+            const statusCode = getErrorStatusCode(err);
+            await mailService.logApiCall(
+                MAIL_LOG_ACTIONS.MAIL_TEXT,
+                request.apiKey?.id,
+                undefined,
+                request.ip,
+                statusCode,
+                Date.now() - startTime
+            );
+            reply.code(statusCode).type('text/plain').send(`Error: ${message}`);
             return;
         }
 
@@ -284,6 +302,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!request.apiKey?.id) {
             throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
         }
+        fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.MAIL_ALL);
 
         const emailAccount = await emailService.getByEmail(input.email);
         if (!emailAccount) {
@@ -347,6 +366,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         if (!request.apiKey?.id) {
             throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
         }
+        fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.PROCESS_MAILBOX);
 
         const emailAccount = await emailService.getByEmail(input.email);
         if (!emailAccount) {
@@ -407,6 +427,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             if (!request.apiKey?.id) {
                 throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
             }
+            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.LIST_EMAILS);
 
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
 
@@ -455,6 +476,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             if (!request.apiKey?.id) {
                 throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
             }
+            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.POOL_STATS);
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
             const stats = await poolService.getStats(request.apiKey.id, groupName);
 
@@ -490,6 +512,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             if (!request.apiKey?.id) {
                 throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
             }
+            fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.POOL_RESET);
             const groupName = getGroupNameFromRequest(request.method, request.query, request.body);
             await poolService.reset(request.apiKey.id, groupName);
 
