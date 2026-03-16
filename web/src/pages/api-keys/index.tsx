@@ -23,6 +23,7 @@ import {
     DatePicker,
     Checkbox,
     Spin,
+    Empty,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -119,9 +120,11 @@ const ApiKeysPage: React.FC = () => {
     const [allEmailOptions, setAllEmailOptions] = useState<EmailOptionItem[]>([]);
     const [poolGroupName, setPoolGroupName] = useState<string | undefined>(undefined);
     const [emailGroupId, setEmailGroupId] = useState<number | undefined>(undefined);
+    const [allowedEmailKeyword, setAllowedEmailKeyword] = useState('');
     const latestListRequestIdRef = useRef(0);
     const [form] = Form.useForm();
     const selectedAllowedGroupIds = Form.useWatch('allowedGroupIds', form) as number[] | undefined;
+    const selectedAllowedEmailIds = Form.useWatch('allowedEmailIds', form) as number[] | undefined;
 
     const permissionActionOptions = useMemo(
         () =>
@@ -195,6 +198,7 @@ const ApiKeysPage: React.FC = () => {
     const handleCreate = () => {
         setEditingId(null);
         setApiKeyDetailLoading(false);
+        setAllowedEmailKeyword('');
         form.resetFields();
         form.setFieldsValue({
             permissions: allPermissionActions,
@@ -207,6 +211,7 @@ const ApiKeysPage: React.FC = () => {
     const handleEdit = useCallback(async (record: ApiKey) => {
         setEditingId(record.id);
         setApiKeyDetailLoading(true);
+        setAllowedEmailKeyword('');
         form.setFieldsValue({
             name: record.name,
             rateLimit: record.rateLimit,
@@ -567,22 +572,42 @@ const ApiKeysPage: React.FC = () => {
         [groups]
     );
 
-    const scopedAllowedEmailOptions = useMemo(() => {
+    const hasAllowedGroupFilter = Array.isArray(selectedAllowedGroupIds) && selectedAllowedGroupIds.length > 0;
+
+    const scopedAllowedEmails = useMemo(() => {
         const selectedGroupSet = new Set(
             Array.isArray(selectedAllowedGroupIds)
                 ? selectedAllowedGroupIds.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0)
                 : []
         );
 
-        const candidates = selectedGroupSet.size > 0
+        return selectedGroupSet.size > 0
             ? allEmailOptions.filter((item) => item.groupId !== null && selectedGroupSet.has(item.groupId))
             : allEmailOptions;
-
-        return candidates.map((item) => ({
-            value: item.id,
-            label: item.group?.name ? `${item.email}（${item.group.name}）` : item.email,
-        }));
     }, [allEmailOptions, selectedAllowedGroupIds]);
+
+    const filteredAllowedEmails = useMemo(() => {
+        const keyword = allowedEmailKeyword.trim().toLowerCase();
+        if (!keyword) {
+            return scopedAllowedEmails;
+        }
+
+        return scopedAllowedEmails.filter((item) => {
+            const emailText = item.email.toLowerCase();
+            const groupText = item.group?.name?.toLowerCase() || '';
+            return emailText.includes(keyword) || groupText.includes(keyword);
+        });
+    }, [allowedEmailKeyword, scopedAllowedEmails]);
+
+    const filteredAllowedEmailIdSet = useMemo(
+        () => new Set(filteredAllowedEmails.map((item) => item.id)),
+        [filteredAllowedEmails]
+    );
+
+    const selectedAllowedInFilteredCount = useMemo(
+        () => (selectedAllowedEmailIds || []).filter((id) => filteredAllowedEmailIdSet.has(id)).length,
+        [filteredAllowedEmailIdSet, selectedAllowedEmailIds]
+    );
 
     useEffect(() => {
         const currentValue = form.getFieldValue('allowedEmailIds');
@@ -591,12 +616,12 @@ const ApiKeysPage: React.FC = () => {
             return;
         }
 
-        const allowedSet = new Set(scopedAllowedEmailOptions.map((item) => item.value));
+        const allowedSet = new Set(scopedAllowedEmails.map((item) => item.id));
         const nextSelected = selected.filter((item: number) => allowedSet.has(item));
         if (nextSelected.length !== selected.length) {
             form.setFieldValue('allowedEmailIds', nextSelected);
         }
-    }, [form, scopedAllowedEmailOptions]);
+    }, [form, scopedAllowedEmails]);
 
     const filteredEmailList = useMemo(() => {
         const keyword = emailKeyword.trim().toLowerCase();
@@ -652,9 +677,12 @@ const ApiKeysPage: React.FC = () => {
                 title={editingId ? '编辑 API Key' : '创建 API Key'}
                 open={modalVisible}
                 onOk={handleSubmit}
-                onCancel={() => setModalVisible(false)}
+                onCancel={() => {
+                    setAllowedEmailKeyword('');
+                    setModalVisible(false);
+                }}
                 destroyOnClose
-                width={500}
+                width={640}
             >
                 <Spin spinning={apiKeyDetailLoading}>
                 <Form form={form} layout="vertical">
@@ -715,26 +743,100 @@ const ApiKeysPage: React.FC = () => {
                             options={emailGroupOptions}
                             optionFilterProp="label"
                             maxTagCount="responsive"
+                            notFoundContent="暂无分组，留空表示全部邮箱"
                         />
                     </Form.Item>
                     <Form.Item
-                        name="allowedEmailIds"
                         label="可用邮箱（可选）"
                         tooltip="不选择表示使用分组范围内全部邮箱"
                     >
-                        <Select
-                            mode="multiple"
-                            allowClear
-                            showSearch
-                            placeholder="默认：分组范围内全部邮箱"
-                            options={scopedAllowedEmailOptions}
-                            optionFilterProp="label"
-                            maxTagCount="responsive"
-                        />
+                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Input
+                                allowClear
+                                value={allowedEmailKeyword}
+                                onChange={(event) => setAllowedEmailKeyword(event.target.value)}
+                                prefix={<SearchOutlined />}
+                                placeholder="搜索邮箱或分组"
+                            />
+                            <Space wrap size={[8, 8]}>
+                                <Button
+                                    size="small"
+                                    disabled={filteredAllowedEmails.length === 0}
+                                    onClick={() => {
+                                        const merged = new Set((selectedAllowedEmailIds || []).map((item) => Number(item)));
+                                        filteredAllowedEmails.forEach((item) => merged.add(item.id));
+                                        form.setFieldValue('allowedEmailIds', Array.from(merged));
+                                    }}
+                                >
+                                    全选当前结果
+                                </Button>
+                                <Button
+                                    size="small"
+                                    disabled={(selectedAllowedEmailIds || []).length === 0}
+                                    onClick={() => {
+                                        form.setFieldValue(
+                                            'allowedEmailIds',
+                                            (selectedAllowedEmailIds || []).filter((id) => !filteredAllowedEmailIdSet.has(id))
+                                        );
+                                    }}
+                                >
+                                    清空当前结果
+                                </Button>
+                                <Text type="secondary">
+                                    当前可选邮箱：{scopedAllowedEmails.length}
+                                </Text>
+                                <Text type="secondary">
+                                    已选择 {selectedAllowedEmailIds?.length || 0}
+                                    {`（当前结果 ${selectedAllowedInFilteredCount} / ${filteredAllowedEmails.length}）`}
+                                </Text>
+                            </Space>
+                            <Form.Item name="allowedEmailIds" noStyle>
+                                <Checkbox.Group style={{ width: '100%' }}>
+                                    <div
+                                        style={{
+                                            maxHeight: 260,
+                                            overflow: 'auto',
+                                            border: '1px solid #f0f0f0',
+                                            borderRadius: 6,
+                                            padding: 12,
+                                            background: '#fafafa',
+                                        }}
+                                    >
+                                        {filteredAllowedEmails.length > 0 ? (
+                                            <Row gutter={[0, 8]}>
+                                                {filteredAllowedEmails.map((item) => (
+                                                    <Col span={24} key={item.id}>
+                                                        <Checkbox value={item.id}>
+                                                            <Space size={8} wrap>
+                                                                <span>{item.email}</span>
+                                                                <Tag color={item.group ? 'blue' : 'default'}>
+                                                                    {item.group?.name || '未分组'}
+                                                                </Tag>
+                                                            </Space>
+                                                        </Checkbox>
+                                                    </Col>
+                                                ))}
+                                            </Row>
+                                        ) : (
+                                            <Empty
+                                                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                                description={
+                                                    hasAllowedGroupFilter
+                                                        ? '所选分组下暂无启用邮箱'
+                                                        : allowedEmailKeyword.trim()
+                                                            ? '没有匹配的邮箱'
+                                                            : '暂无启用邮箱'
+                                                }
+                                            />
+                                        )}
+                                    </div>
+                                </Checkbox.Group>
+                            </Form.Item>
+                            <Text type="secondary">
+                                留空表示使用{hasAllowedGroupFilter ? '所选分组' : '全部分组'}范围内全部邮箱
+                            </Text>
+                        </Space>
                     </Form.Item>
-                    <Text type="secondary">
-                        当前可选邮箱：{scopedAllowedEmailOptions.length}
-                    </Text>
                 </Form>
                 </Spin>
             </Modal>
