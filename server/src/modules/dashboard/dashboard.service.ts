@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma.js';
 import type { Prisma } from '@prisma/client';
+import { buildApiTrend, getUtcTrendRange } from './dashboard.trend.js';
 
 function extractRequestIdFromMetadata(metadata: Prisma.JsonValue | null): string | null {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
@@ -55,39 +56,23 @@ export const dashboardService = {
      * 获取 API 调用趋势
      */
     async getApiTrend(days: number = 7) {
-        const safeDays = Math.max(1, Math.min(days, 90));
-        const endDate = new Date();
-        endDate.setHours(0, 0, 0, 0);
-        const startDate = new Date(endDate);
-        startDate.setDate(startDate.getDate() - safeDays + 1);
-        const nextDate = new Date(endDate);
-        nextDate.setDate(nextDate.getDate() + 1);
+        const { startDate, nextDate, dateKeys } = getUtcTrendRange(days);
+        const logs = await prisma.apiLog.findMany({
+            where: {
+                createdAt: {
+                    gte: startDate,
+                    lt: nextDate,
+                },
+            },
+            select: {
+                createdAt: true,
+            },
+        });
 
-        const rows = await prisma.$queryRaw<Array<{ date: string; count: bigint | number }>>`
-            WITH day_series AS (
-                SELECT generate_series(${startDate}::date, ${endDate}::date, interval '1 day')::date AS day
-            ),
-            day_counts AS (
-                SELECT
-                    date_trunc('day', "created_at")::date AS day,
-                    COUNT(*)::bigint AS count
-                FROM "api_logs"
-                WHERE "created_at" >= ${startDate}
-                  AND "created_at" < ${nextDate}
-                GROUP BY 1
-            )
-            SELECT
-                to_char(day_series.day, 'YYYY-MM-DD') AS date,
-                COALESCE(day_counts.count, 0)::bigint AS count
-            FROM day_series
-            LEFT JOIN day_counts ON day_counts.day = day_series.day
-            ORDER BY day_series.day ASC
-        `;
-
-        return rows.map((row) => ({
-            date: row.date,
-            count: Number(row.count),
-        }));
+        return buildApiTrend(
+            logs.map(log => log.createdAt),
+            dateKeys
+        );
     },
 
     /**

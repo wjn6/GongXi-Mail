@@ -15,9 +15,6 @@ RUN cd web && npm install --legacy-peer-deps
 COPY server ./server
 COPY web ./web
 
-# Generate Prisma client
-RUN cd server && npx prisma generate
-
 # Build server
 RUN cd server && npm run build
 
@@ -31,6 +28,7 @@ WORKDIR /app
 
 # Copy server
 COPY --from=builder /app/server/dist ./server/dist
+COPY --from=builder /app/server/src/generated ./server/dist/generated
 COPY --from=builder /app/server/node_modules ./server/node_modules
 COPY --from=builder /app/server/package.json ./server/
 COPY --from=builder /app/server/prisma ./server/prisma
@@ -41,7 +39,7 @@ COPY --from=builder /app/web/dist ./public
 # Set working directory to server
 WORKDIR /app/server
 
-# Run database migrations and start server
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]
+# Sync database schema and start server
+CMD ["sh", "-c", "npm run db:push:auto && node dist/index.js"]
 
 EXPOSE 3000

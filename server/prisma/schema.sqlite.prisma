@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/sqlite-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// 管理员
+// ============================================
+model Admin {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  email        String?   @unique
+  role         Role      @default(ADMIN)
+  status       Status    @default(ACTIVE)
+  twoFactorEnabled    Boolean   @default(false) @map("two_factor_enabled")
+  twoFactorSecret     String?   @map("two_factor_secret")
+  twoFactorTempSecret String?   @map("two_factor_temp_secret")
+  lastLoginAt  DateTime? @map("last_login_at")
+  lastLoginIp  String?   @map("last_login_ip")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  apiKeys ApiKey[]
+
+  @@map("admins")
+}
+
+// ============================================
+// API Key
+// ============================================
+model ApiKey {
+  id          Int       @id @default(autoincrement())
+  name        String
+  keyHash     String    @unique @map("key_hash")
+  keyPrefix   String    @map("key_prefix")
+  permissions Json?
+  allowedGroupIds Json? @map("allowed_group_ids")
+  allowedEmailIds Json? @map("allowed_email_ids")
+  rateLimit   Int       @default(60) @map("rate_limit")
+  status      Status    @default(ACTIVE)
+  expiresAt   DateTime? @map("expires_at")
+  lastUsedAt  DateTime? @map("last_used_at")
+  usageCount  BigInt    @default(0) @map("usage_count")
+  createdBy   Int       @map("created_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  creator     Admin        @relation(fields: [createdBy], references: [id])
+  emailUsages EmailUsage[]
+  apiLogs     ApiLog[]
+
+  @@map("api_keys")
+}
+
+// ============================================
+// 邮箱分组
+// ============================================
+model EmailGroup {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  description String?
+  fetchStrategy MailFetchStrategy @default(GRAPH_FIRST) @map("fetch_strategy")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  emails EmailAccount[]
+
+  @@map("email_groups")
+}
+
+// ============================================
+// 邮箱账户
+// ============================================
+model EmailAccount {
+  id           Int         @id @default(autoincrement())
+  email        String      @unique
+  clientId     String      @map("client_id")
+  password     String?
+  refreshToken String      @map("refresh_token")
+  status       EmailStatus @default(ACTIVE)
+  groupId      Int?        @map("group_id")
+  lastCheckAt  DateTime?   @map("last_check_at")
+  tokenRefreshedAt DateTime? @map("token_refreshed_at")
+  errorMessage String?     @map("error_message")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  group   EmailGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  usages  EmailUsage[]
+  apiLogs ApiLog[]
+
+  @@map("email_accounts")
+}
+
+// ============================================
+// 系统配置
+// ============================================
+model SystemConfig {
+  id                        Int      @id @default(1)
+  tokenRefreshEnabled       Boolean  @default(true) @map("token_refresh_enabled")
+  tokenRefreshIntervalHours Int      @default(12) @map("token_refresh_interval_hours")
+  tokenRefreshConcurrency   Int      @default(10) @map("token_refresh_concurrency")
+  tokenRefreshNextRunAt     DateTime? @map("token_refresh_next_run_at")
+  tokenRefreshLastAutoCompletedAt DateTime? @map("token_refresh_last_auto_completed_at")
+  tokenRefreshLastAutoTotal Int?     @map("token_refresh_last_auto_total")
+  tokenRefreshLastAutoSuccess Int?   @map("token_refresh_last_auto_success")
+  tokenRefreshLastAutoFailed Int?    @map("token_refresh_last_auto_failed")
+  tokenRefreshLastAutoDurationMs Int? @map("token_refresh_last_auto_duration_ms")
+  tokenRefreshLastAutoFailures Json? @map("token_refresh_last_auto_failures")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  @@map("system_config")
+}
+
+// ============================================
+// 邮箱使用记录（邮箱池）
+// ============================================
+model EmailUsage {
+  id             Int      @id @default(autoincrement())
+  apiKeyId       Int      @map("api_key_id")
+  emailAccountId Int      @map("email_account_id")
+  usedAt         DateTime @default(now()) @map("used_at")
+
+  apiKey       ApiKey       @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  emailAccount EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, emailAccountId])
+  @@map("email_usage")
+}
+
+// ============================================
+// API 调用日志
+// ============================================
+model ApiLog {
+  id             Int       @id @default(autoincrement())
+  apiKeyId       Int?      @map("api_key_id")
+  emailAccountId Int?      @map("email_account_id")
+  action         String
+  requestIp      String?   @map("request_ip")
+  responseCode   Int?      @map("response_code")
+  responseTimeMs Int?      @map("response_time_ms")
+  metadata       Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  apiKey       ApiKey?       @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  emailAccount EmailAccount? @relation(fields: [emailAccountId], references: [id], onDelete: SetNull)
+
+  @@index([apiKeyId])
+  @@index([emailAccountId])
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@map("api_logs")
+}
+
+// ============================================
+// 枚举
+// ============================================
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+}
+
+enum Status {
+  ACTIVE
+  DISABLED
+}
+
+enum EmailStatus {
+  ACTIVE
+  ERROR
+  DISABLED
+}
+
+enum MailFetchStrategy {
+  GRAPH_FIRST
+  IMAP_FIRST
+  GRAPH_ONLY
+  IMAP_ONLY
+}

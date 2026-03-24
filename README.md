@@ -74,7 +74,8 @@ npm run test
 |------|------|--------|
 | NODE_ENV | 环境 | development |
 | PORT | 端口 | 3000 |
-| DATABASE_URL | PostgreSQL 连接 | - |
+| DATABASE_PROVIDER | 数据库类型（`postgresql` / `sqlite`） | postgresql |
+| DATABASE_URL | 数据库连接字符串（SQLite 使用 `file:/...`） | - |
 | REDIS_URL | Redis 连接 | - |
 | CORS_ORIGIN | 允许跨域来源（逗号分隔） | 开发环境默认放开 |
 | JWT_SECRET | JWT 密钥 (≥32字符) | - |
@@ -88,6 +89,12 @@ npm run test
 | ADMIN_2FA_WINDOW | TOTP 时间窗口（步长） | 1 |
 | API_LOG_RETENTION_DAYS | API 日志保留天数 | 30 |
 | API_LOG_CLEANUP_INTERVAL_MINUTES | API 日志清理间隔（分钟） | 60 |
+
+### SQLite / PostgreSQL 切换
+
+- 默认：`DATABASE_PROVIDER=postgresql`（保持原有行为）
+- SQLite：`DATABASE_PROVIDER=sqlite` 且 `DATABASE_URL=file:/data/gongxi.db`
+- 启动时会根据 `DATABASE_PROVIDER` 自动执行对应的 `prisma db push`
 
 ## 枚举约定
 
