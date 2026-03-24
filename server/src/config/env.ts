@@ -6,7 +6,8 @@ const envSchema = z.object({
     PORT: z.coerce.number().default(3000),
 
     // Database
-    DATABASE_URL: z.string().url(),
+    DATABASE_PROVIDER: z.enum(['postgresql', 'sqlite']).default('postgresql'),
+    DATABASE_URL: z.string().min(1),
 
     // Redis (optional)
     REDIS_URL: z.string().optional(),
@@ -64,6 +65,31 @@ function loadEnv(): Env {
             _errors: [],
             ADMIN_PASSWORD: {
                 _errors: ['Production ADMIN_PASSWORD cannot use default value'],
+            },
+        });
+        process.exit(1);
+    }
+
+    if (result.data.DATABASE_PROVIDER === 'sqlite' && !result.data.DATABASE_URL.startsWith('file:')) {
+        console.error('❌ Invalid environment variables:');
+        console.error({
+            _errors: [],
+            DATABASE_URL: {
+                _errors: ['SQLite DATABASE_URL must start with file: (for example file:/data/gongxi.db)'],
+            },
+        });
+        process.exit(1);
+    }
+
+    if (
+        result.data.DATABASE_PROVIDER === 'postgresql'
+        && !(result.data.DATABASE_URL.startsWith('postgresql://') || result.data.DATABASE_URL.startsWith('postgres://'))
+    ) {
+        console.error('❌ Invalid environment variables:');
+        console.error({
+            _errors: [],
+            DATABASE_URL: {
+                _errors: ['PostgreSQL DATABASE_URL must start with postgresql:// or postgres://'],
             },
         });
         process.exit(1);

@@ -6,14 +6,18 @@
     "main": "dist/index.js",
     "scripts": {
         "dev": "tsx watch src/index.ts",
-        "build": "tsc",
+        "build": "npm run db:generate:all && tsc && sh -c 'mkdir -p dist/generated && rm -rf dist/generated/sqlite-client && cp -R src/generated/sqlite-client dist/generated/'",
         "lint": "eslint \"src/**/*.ts\"",
         "lint:fix": "eslint \"src/**/*.ts\" --fix",
         "test": "tsx --test src/**/*.test.ts",
         "start": "node dist/index.js",
-        "db:generate": "prisma generate",
-        "db:push": "prisma db push",
-        "db:migrate": "prisma migrate deploy",
+        "db:generate": "prisma generate --schema prisma/schema.prisma",
+        "db:generate:sqlite": "prisma generate --schema prisma/schema.sqlite.prisma",
+        "db:generate:all": "npm run db:generate && npm run db:generate:sqlite",
+        "db:push": "prisma db push --schema prisma/schema.prisma",
+        "db:push:sqlite": "prisma db push --schema prisma/schema.sqlite.prisma",
+        "db:push:auto": "sh -c 'if [ \"${DATABASE_PROVIDER:-postgresql}\" = \"sqlite\" ]; then prisma db push --schema prisma/schema.sqlite.prisma --skip-generate; else prisma db push --schema prisma/schema.prisma --skip-generate; fi'",
+        "db:migrate": "prisma migrate deploy --schema prisma/schema.prisma",
         "db:studio": "prisma studio"
     },
     "dependencies": {
