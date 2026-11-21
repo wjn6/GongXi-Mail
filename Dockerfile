@@ -41,7 +41,7 @@ COPY --from=builder /app/web/dist ./public
 # Set working directory to server
 WORKDIR /app/server
 
-# Run database migrations and start server
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]
+# Apply committed migrations, then start server
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
 
 EXPOSE 3000
