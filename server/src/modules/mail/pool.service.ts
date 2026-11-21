@@ -168,50 +168,6 @@ export const poolService = {
     },
 
     /**
-     * 检查 API Key 是否拥有该邮箱的使用权
-     */
-    async checkOwnership(apiKeyId: number, emailAddress: string) {
-        const email = await prisma.emailAccount.findUnique({
-            where: { email: emailAddress },
-            include: {
-                usages: {
-                    where: { apiKeyId },
-                },
-            },
-        });
-
-        if (!email) {
-            throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
-        }
-
-        return email.usages.length > 0;
-    },
-
-    /**
-     * 获取已分配给该 API Key 的邮箱列表
-     */
-    async getAllocatedEmails(apiKeyId: number) {
-        const usages = await prisma.emailUsage.findMany({
-            where: { apiKeyId },
-            include: {
-                emailAccount: {
-                    select: {
-                        id: true,
-                        email: true,
-                        status: true,
-                    },
-                },
-            },
-        });
-
-        return usages.map((u: { emailAccount: { email: string; status: string }; usedAt: Date }) => ({
-            email: u.emailAccount.email,
-            status: u.emailAccount.status,
-            allocatedAt: u.usedAt,
-        }));
-    },
-
-    /**
      * 获取使用统计（可按分组过滤）
      */
     async getStats(apiKeyId: number, groupName?: string) {
@@ -257,22 +213,12 @@ export const poolService = {
             return { success: true };
         }
 
-        if (groupId !== undefined) {
-            // 仅重置该分组的邮箱使用记录
-            await prisma.emailUsage.deleteMany({
-                where: {
-                    apiKeyId,
-                    emailAccountId: { in: scopedEmailIds },
-                },
-            });
-        } else {
-            await prisma.emailUsage.deleteMany({
-                where: {
-                    apiKeyId,
-                    emailAccountId: { in: scopedEmailIds },
-                },
-            });
-        }
+        await prisma.emailUsage.deleteMany({
+            where: {
+                apiKeyId,
+                emailAccountId: { in: scopedEmailIds },
+            },
+        });
 
         return { success: true };
     },

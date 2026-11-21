@@ -298,8 +298,8 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
           <div>
             <p style={{ marginBottom: 8 }}>系统提供灵活的邮箱访问方式：</p>
             <ul style={{ marginBottom: 8, paddingLeft: 20 }}>
-              <li><strong>直接访问</strong>：如果您已知目标邮箱地址，可直接调用 <code>/api/mail_new</code> 或 <code>/api/mail_all</code> 获取邮件，无需任何前置分配操作。</li>
-              <li><strong>自动分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将返回一个随机邮箱并标记为您已使用，避免重复。</li>
+                  <li><strong>直接访问</strong>：如果您已知目标邮箱地址，可直接调用 <code>/api/mail_new</code> 或 <code>/api/mail_all</code> 获取邮件，无需任何前置分配操作。</li>
+                  <li><strong>顺序分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将按编号顺序分配一个未使用邮箱并标记为您已使用，避免重复。</li>
               <li><strong>文本提速</strong>：对于自动化脚本，推荐使用 <code>/api/mail_text</code> 配合正则匹配，直接获取验证码等核心信息。</li>
             </ul>
           </div>

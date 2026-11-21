@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthStore } from '../../stores/authStore';
+import { isSuperAdmin } from '../../utils/auth';
 import {
     Table,
     Button,
@@ -96,6 +98,7 @@ interface EmailDetailsResult extends EmailAccount {
 }
 
 const EmailsPage: React.FC = () => {
+    const { admin } = useAuthStore();
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<EmailAccount[]>([]);
     const [total, setTotal] = useState(0);
@@ -688,6 +691,7 @@ const EmailsPage: React.FC = () => {
                         <html>
                         <head>
                             <meta charset="utf-8">
+                            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;">
                             <style>
                                 body { 
                                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -833,9 +837,11 @@ const EmailsPage: React.FC = () => {
                                         <Button icon={<UploadOutlined />} onClick={() => setImportModalVisible(true)}>
                                             导入
                                         </Button>
-                                        <Button icon={<DownloadOutlined />} onClick={handleExport}>
-                                            导出
-                                        </Button>
+                                        {isSuperAdmin(admin?.role) && (
+                                            <Button icon={<DownloadOutlined />} onClick={handleExport}>
+                                                导出
+                                            </Button>
+                                        )}
                                         {selectedRowKeys.length > 0 && (
                                             <>
                                                 <Button icon={<GroupOutlined />} onClick={() => setAssignGroupModalVisible(true)}>
@@ -1094,8 +1100,9 @@ const EmailsPage: React.FC = () => {
                 >
                     <iframe
                         title="email-content"
-                        sandbox="allow-same-origin"
+                        sandbox=""
                         srcDoc={emailDetailSrcDoc}
+                        referrerPolicy="no-referrer"
                         style={{
                             width: '100%',
                             height: 'calc(100vh - 300px)',

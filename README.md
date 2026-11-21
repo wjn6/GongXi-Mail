@@ -88,6 +88,7 @@ npm run test
 | ADMIN_2FA_WINDOW | TOTP 时间窗口（步长） | 1 |
 | API_LOG_RETENTION_DAYS | API 日志保留天数 | 30 |
 | API_LOG_CLEANUP_INTERVAL_MINUTES | API 日志清理间隔（分钟） | 60 |
+| HTTPS_PROXY / HTTP_PROXY | 出站代理兜底（请求未带 socks5/http 参数时生效，含 Token 轮换） | - |
 
 ## 枚举约定
 
@@ -195,6 +196,23 @@ API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`�
 - 如需跨域访问，配置 `CORS_ORIGIN`（如 `https://admin.example.com,https://ops.example.com`）。
 - 生产模式会在启动时对前端静态资源生成 `.gz/.br` 预压缩文件，并优先下发压缩版本。
 - 服务会按 `API_LOG_RETENTION_DAYS` 与 `API_LOG_CLEANUP_INTERVAL_MINUTES` 自动清理历史 API 日志。
+- 全局 IP 限流默认 300 次/分钟，登录接口 10 次/分钟/IP；`/api/*` 不参与全局限流，改用按 API Key 的限流（每分钟 `rateLimit` 次）。
+- 邮箱明文导出（`/admin/emails/export`、`/admin/emails/:id?secrets=true`）仅超级管理员可用。
+
+## 数据库迁移
+
+项目使用 Prisma Migrate 管理表结构，初始基线在 `server/prisma/migrations/20260222000000_init`。
+
+- 本地开发：改 `schema.prisma` 后用 `npx prisma migrate dev --name <change>` 生成迁移文件并一起提交。
+- 生产/容器：启动时自动执行 `prisma migrate deploy`，只应用已提交的迁移，不会改坏表结构。
+- **已有部署升级**：如果你的数据库此前由 `db push` 维护，首次升级到迁移模式时执行一次：
+
+```bash
+cd server
+npx prisma migrate resolve --applied 20260222000000_init
+```
+
+之后新迁移会正常增量化应用。`db push` 仅保留在开发期快速试验用，不要再用于生产。
 
 ## License
 

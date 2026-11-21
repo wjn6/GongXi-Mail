@@ -36,8 +36,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # 不映射宿主端口：仅限内网容器访问（compose 网络内主机名 redis:6379）
     restart: unless-stopped
     networks:
       - app-network
@@ -52,8 +51,8 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    ports:
-      - "15432:5432"
+    # 不映射宿主端口：仅限内网容器访问（compose 网络内主机名 postgres:5432）
+    # 如需从宿主机连接调试，可临时恢复 "15432:5432" 并改强密码
     environment:
       - POSTGRES_USER=oauth2api
       - POSTGRES_PASSWORD=oauth2api_secret
