@@ -1,19 +1,22 @@
 import { type FastifyPluginAsync } from 'fastify';
 import { authService } from './auth.service.js';
 import { loginSchema, changePasswordSchema, verify2FaSchema, disable2FaSchema } from './auth.schema.js';
+import { jwtExpiresInSeconds } from '../../config/env.js';
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
-    // 登录
-    fastify.post('/login', async (request, reply) => {
+    // 登录（按 IP 限流，防暴力破解；账号级锁定见 auth.service）
+    fastify.post('/login', {
+        config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    }, async (request, reply) => {
         const input = loginSchema.parse(request.body);
         const result = await authService.login(input, request.ip);
 
-        // 设置 Cookie
+        // 设置 Cookie（与 JWT_EXPIRES_IN 保持一致，maxAge 单位为秒）
         reply.cookie('token', result.token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            maxAge: 7200, // 2 hours (seconds)
+            maxAge: jwtExpiresInSeconds(),
         });
 
         return { success: true, data: result };

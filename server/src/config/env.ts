@@ -47,6 +47,24 @@ const envSchema = z.object({
     TOKEN_REFRESH_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(10),
 });
 
+const JWT_DURATION_UNITS: Record<string, number> = {
+    s: 1,
+    m: 60,
+    h: 3600,
+    d: 86400,
+};
+
+/**
+ * 把 JWT_EXPIRES_IN（如 "2h"）换算成秒数，供 cookie maxAge 使用
+ */
+export function jwtExpiresInSeconds(): number {
+    const match = /^(\d+)([smhd])$/.exec(env.JWT_EXPIRES_IN.trim());
+    if (!match) {
+        return 7200;
+    }
+    return parseInt(match[1], 10) * JWT_DURATION_UNITS[match[2]]!;
+}
+
 export type Env = z.infer<typeof envSchema>;
 
 function loadEnv(): Env {

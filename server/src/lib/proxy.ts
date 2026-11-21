@@ -65,6 +65,8 @@ export function createHttpAgent(http: string): ProxyAgent | null {
 
 /**
  * 自动选择代理
+ * 显式传入的 socks5/http 优先；未指定时回退到标准环境变量（HTTPS_PROXY/HTTP_PROXY），
+ * 使 Token 轮换等后台任务也能走代理。
  */
 export function autoProxy(socks5?: string, http?: string): ProxyOptions {
     // SOCKS5 代理优先
@@ -82,6 +84,22 @@ export function autoProxy(socks5?: string, http?: string): ProxyOptions {
     // HTTP 代理
     if (http) {
         const dispatcher = createHttpAgent(http);
+        if (dispatcher) {
+            return {
+                fetch: undiciFetch as unknown as typeof fetch,
+                dispatcher,
+                type: 'http',
+            };
+        }
+    }
+
+    // 环境变量代理
+    const envProxy = process.env.HTTPS_PROXY
+        || process.env.https_proxy
+        || process.env.HTTP_PROXY
+        || process.env.http_proxy;
+    if (envProxy) {
+        const dispatcher = createHttpAgent(envProxy);
         if (dispatcher) {
             return {
                 fetch: undiciFetch as unknown as typeof fetch,

@@ -22,6 +22,10 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     fastify.get('/:id', async (request) => {
         const { id } = request.params as { id: string };
         const { secrets } = request.query as { secrets?: string };
+        // 含密钥的详情仅超级管理员可见
+        if (secrets === 'true' && request.user?.role !== 'SUPER_ADMIN') {
+            throw new AppError('FORBIDDEN', 'Super admin access required', 403);
+        }
         const email = await emailService.getById(parseInt(id), secrets === 'true');
         return { success: true, data: email };
     });
@@ -104,8 +108,10 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
         return { success: true, data: result };
     });
 
-    // 导出
-    fastify.get('/export', async (request) => {
+    // 导出（含 refresh token 明文，仅超级管理员）
+    fastify.get('/export', {
+        preHandler: [fastify.requireSuperAdmin],
+    }, async (request) => {
         const query = z.object({
             ids: z.string().optional(),
             separator: z.string().optional(),

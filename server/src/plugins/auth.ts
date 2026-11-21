@@ -4,6 +4,7 @@ import { verifyToken } from '../lib/jwt.js';
 import { hashApiKey } from '../lib/crypto.js';
 import prisma from '../lib/prisma.js';
 import { getRedis } from '../lib/redis.js';
+import { logger } from '../lib/logger.js';
 import { AppError } from './error.js';
 import { isApiPermissionAllowed, parseApiPermissions, type ApiPermissions } from './api-permissions.js';
 
@@ -83,9 +84,9 @@ async function enforceApiKeyRateLimit(apiKeyId: number, maxPerMinute: number): P
     const redis = getRedis();
 
     if (redis) {
+        const minuteBucket = Math.floor(now / 60000);
+        const key = `rate_limit:api_key:${apiKeyId}:${minuteBucket}`;
         try {
-            const minuteBucket = Math.floor(now / 60000);
-            const key = `rate_limit:api_key:${apiKeyId}:${minuteBucket}`;
             const count = await redis.incr(key);
 
             if (count === 1) {
@@ -96,8 +97,12 @@ async function enforceApiKeyRateLimit(apiKeyId: number, maxPerMinute: number): P
                 throw new AppError('RATE_LIMIT_EXCEEDED', `Rate limit exceeded: ${maxPerMinute} requests/minute`, 429);
             }
             return;
-        } catch {
+        } catch (err) {
+            if (err instanceof AppError) {
+                throw err;
+            }
             // Redis 异常时回退本地限流
+            logger.warn({ err, apiKeyId }, 'Redis rate limit failed, falling back to local store');
         }
     }
 
@@ -132,8 +137,22 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
             throw new AppError('INVALID_TOKEN', 'Invalid or expired token', 401);
         }
 
+        const adminId = parseInt(payload.sub, 10);
+        if (!Number.isInteger(adminId) || adminId <= 0) {
+            throw new AppError('INVALID_TOKEN', 'Invalid or expired token', 401);
+        }
+
+        // 每次请求校验管理员状态，禁用/删除的账号立即失效
+        const admin = await prisma.admin.findUnique({
+            where: { id: adminId },
+            select: { status: true },
+        });
+        if (!admin || admin.status !== 'ACTIVE') {
+            throw new AppError('INVALID_TOKEN', 'Account is disabled or no longer exists', 401);
+        }
+
         request.user = {
-            id: parseInt(payload.sub),
+            id: adminId,
             username: payload.username,
             role: payload.role,
         };

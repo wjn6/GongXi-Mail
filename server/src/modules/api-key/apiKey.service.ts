@@ -200,10 +200,8 @@ export const apiKeyService = {
             updateData.expiresAt = expiresAt ? new Date(expiresAt) : null;
         }
         if (permissions !== undefined) {
-            const normalizedPermissions = parseApiPermissions(permissions);
-            if (normalizedPermissions) {
-                updateData.permissions = normalizedPermissions;
-            }
+            // 显式传空对象/无有效权限 = 清空权限表，恢复为允许全部
+            updateData.permissions = parseApiPermissions(permissions) ?? Prisma.DbNull;
         }
         if (input.allowedGroupIds !== undefined) {
             const allowedGroupIds = normalizeDistinctPositiveIds(input.allowedGroupIds) || [];
@@ -260,36 +258,5 @@ export const apiKeyService = {
 
         await prisma.apiKey.delete({ where: { id } });
         return { success: true };
-    },
-
-    /**
-     * 获取 API Key 使用统计
-     */
-    async getUsageStats(id: number) {
-        const apiKey = await prisma.apiKey.findUnique({
-            where: { id },
-            select: {
-                usageCount: true,
-                lastUsedAt: true,
-                createdAt: true,
-            },
-        });
-
-        if (!apiKey) {
-            throw new AppError('NOT_FOUND', 'API Key not found', 404);
-        }
-
-        const daysSinceCreation = Math.ceil(
-            (Date.now() - new Date(apiKey.createdAt).getTime()) / (1000 * 60 * 60 * 24)
-        );
-        const avgPerDay = daysSinceCreation > 0
-            ? Math.round(Number(apiKey.usageCount) / daysSinceCreation)
-            : Number(apiKey.usageCount);
-
-        return {
-            totalUsage: Number(apiKey.usageCount),
-            lastUsedAt: apiKey.lastUsedAt,
-            avgPerDay,
-        };
     },
 };

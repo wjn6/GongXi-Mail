@@ -29,9 +29,10 @@ export const dashboardService = {
             prisma.apiKey.count(),
             prisma.apiKey.count({ where: { status: 'ACTIVE' } }),
             prisma.apiKey.aggregate({ _sum: { usageCount: true } }),
+            // 近 24 小时有调用的 Key（滚动窗口，不受容器时区影响）
             prisma.apiKey.count({
                 where: {
-                    lastUsedAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+                    lastUsedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
                 },
             }),
         ]);

@@ -21,6 +21,10 @@ function buildLoginAttemptCacheKey(username: string, ip?: string): string {
     return `admin-login:${normalizedUsername}:${normalizedIp}`;
 }
 
+function buildUsernameLockCacheKey(username: string): string {
+    return `admin-login:user:${username.trim().toLowerCase()}`;
+}
+
 function buildRedisLoginAttemptKey(cacheKey: string): string {
     return `auth:admin:login:attempt:${cacheKey}`;
 }
@@ -31,6 +35,8 @@ function buildRedisLoginLockKey(cacheKey: string): string {
 
 const LOCK_SECONDS = env.ADMIN_LOGIN_LOCK_MINUTES * 60;
 const ATTEMPT_WINDOW_SECONDS = LOCK_SECONDS;
+// 单用户名（跨 IP）的全局失败阈值，防止换 IP 绕过单点锁定
+const USERNAME_LOCK_THRESHOLD = env.ADMIN_LOGIN_MAX_ATTEMPTS * 3;
 
 function formatLockMessage(lockSeconds: number): string {
     const minutes = Math.max(1, Math.ceil(lockSeconds / 60));
@@ -67,6 +73,49 @@ async function getLockRemainingSeconds(cacheKey: string): Promise<number> {
     }
 
     return 0;
+}
+
+async function getUsernameLockRemainingSeconds(username: string): Promise<number> {
+    const redis = getRedis();
+    if (redis) {
+        try {
+            const ttl = await redis.ttl(buildRedisLoginLockKey(buildUsernameLockCacheKey(username)));
+            if (ttl > 0) {
+                return ttl;
+            }
+        } catch {
+            // Redis 异常时回退本地存储
+        }
+    }
+
+    return getLockRemainingSeconds(buildUsernameLockCacheKey(username));
+}
+
+async function recordUsernameLoginFailure(username: string): Promise<number> {
+    const redis = getRedis();
+    const usernameKey = buildUsernameLockCacheKey(username);
+
+    if (redis) {
+        try {
+            const attemptKey = buildRedisLoginAttemptKey(usernameKey);
+            const lockKey = buildRedisLoginLockKey(usernameKey);
+            const count = await redis.incr(attemptKey);
+            if (count === 1) {
+                await redis.expire(attemptKey, ATTEMPT_WINDOW_SECONDS);
+            }
+
+            if (count >= USERNAME_LOCK_THRESHOLD) {
+                await redis.set(lockKey, '1', 'EX', LOCK_SECONDS);
+                await redis.del(attemptKey);
+                return LOCK_SECONDS;
+            }
+            return 0;
+        } catch {
+            // Redis 异常时回退本地存储
+        }
+    }
+
+    return recordLoginFailure(usernameKey);
 }
 
 async function clearLoginAttempts(cacheKey: string): Promise<void> {
@@ -161,10 +210,23 @@ export const authService = {
     async login(input: LoginInput, ip?: string) {
         const { username, password, otp } = input;
         const loginAttemptCacheKey = buildLoginAttemptCacheKey(username, ip);
-        const lockSeconds = await getLockRemainingSeconds(loginAttemptCacheKey);
-        if (lockSeconds > 0) {
-            throw new AppError('ACCOUNT_LOCKED', formatLockMessage(lockSeconds), 429);
+        const [lockSeconds, usernameLockSeconds] = await Promise.all([
+            getLockRemainingSeconds(loginAttemptCacheKey),
+            getUsernameLockRemainingSeconds(username),
+        ]);
+        const effectiveLockSeconds = Math.max(lockSeconds, usernameLockSeconds);
+        if (effectiveLockSeconds > 0) {
+            throw new AppError('ACCOUNT_LOCKED', formatLockMessage(effectiveLockSeconds), 429);
         }
+
+        // 同时记录单点（用户名+IP）与用户名级失败计数
+        const recordFailure = async (): Promise<number> => {
+            const [perKey, perUser] = await Promise.all([
+                recordLoginFailure(loginAttemptCacheKey),
+                recordUsernameLoginFailure(username),
+            ]);
+            return Math.max(perKey, perUser);
+        };
 
         // 查询管理员
         const admin = await prisma.admin.findUnique({
@@ -184,7 +246,7 @@ export const authService = {
         if (!admin) {
             if (username === env.ADMIN_USERNAME && password === env.ADMIN_PASSWORD) {
                 if (!verifyLegacyTotpCode(otp)) {
-                    const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
+                    const newLockSeconds = await recordFailure();
                     if (newLockSeconds > 0) {
                         throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
                     }
@@ -202,7 +264,10 @@ export const authService = {
                     },
                 });
 
-                await clearLoginAttempts(loginAttemptCacheKey);
+                await Promise.all([
+                    clearLoginAttempts(loginAttemptCacheKey),
+                    clearLoginAttempts(buildUsernameLockCacheKey(username)),
+                ]);
 
                 // 使用新创建的管理员信息生成 Token
                 const token = await signToken({
@@ -222,7 +287,7 @@ export const authService = {
                 };
             }
 
-            const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
+            const newLockSeconds = await recordFailure();
             if (newLockSeconds > 0) {
                 throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
             }
@@ -237,7 +302,7 @@ export const authService = {
         // 验证密码
         const isValid = await verifyPassword(password, admin.passwordHash);
         if (!isValid) {
-            const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
+            const newLockSeconds = await recordFailure();
             if (newLockSeconds > 0) {
                 throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
             }
@@ -249,14 +314,17 @@ export const authService = {
             : null;
 
         if (admin.twoFactorEnabled && adminTwoFactorSecret && !verifyTotpCode(adminTwoFactorSecret, otp, env.ADMIN_2FA_WINDOW)) {
-            const newLockSeconds = await recordLoginFailure(loginAttemptCacheKey);
+            const newLockSeconds = await recordFailure();
             if (newLockSeconds > 0) {
                 throw new AppError('ACCOUNT_LOCKED', formatLockMessage(newLockSeconds), 429);
             }
             throw new AppError('INVALID_OTP', 'Invalid two-factor code', 401);
         }
 
-        await clearLoginAttempts(loginAttemptCacheKey);
+        await Promise.all([
+                    clearLoginAttempts(loginAttemptCacheKey),
+                    clearLoginAttempts(buildUsernameLockCacheKey(username)),
+                ]);
 
         // 更新登录信息
         await prisma.admin.update({

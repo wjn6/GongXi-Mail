@@ -1,11 +1,9 @@
 import { emailService } from '../email/email.service.js';
-import { poolService } from './pool.service.js';
 import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
 import { setCache, getCache } from '../../lib/redis.js';
 import { proxyFetch } from '../../lib/proxy.js';
 import prisma from '../../lib/prisma.js';
-import type { MailRequestInput } from './mail.schema.js';
 import Imap from 'node-imap';
 import { simpleParser, type ParsedMail, type Source } from 'mailparser';
 
@@ -62,49 +60,11 @@ function getErrorMessage(error: unknown): string {
     return typeof message === 'string' && message.trim() ? message : 'Unknown error';
 }
 
+const IMAP_TIMEOUT_MS = 15_000;
+const IMAP_HARD_TIMEOUT_MS = 60_000;
+const IMAP_HOST = 'outlook.office365.com';
+
 export const mailService = {
-    /**
-     * 解析凭证
-     */
-    async resolveCredentials(
-        input: MailRequestInput,
-        apiKeyId?: number
-    ): Promise<Credentials> {
-        const { email, auto } = input;
-
-        // 自动分配模式
-        if (!email && auto) {
-            if (!apiKeyId) {
-                throw new AppError('AUTH_REQUIRED', 'Auto assignment requires API Key authentication', 400);
-            }
-
-            const account = await poolService.getUnusedEmail(apiKeyId);
-            if (!account) {
-                const stats = await poolService.getStats(apiKeyId);
-                throw new AppError(
-                    'NO_UNUSED_EMAIL',
-                    `No unused emails available. Used: ${stats.used}/${stats.total}`,
-                    400
-                );
-            }
-
-            return { ...account, autoAssigned: true };
-        }
-
-        // 必须提供邮箱
-        if (!email) {
-            throw new AppError('EMAIL_REQUIRED', 'Email is required. Set auto=true to auto-assign.', 400);
-        }
-
-        // 从数据库查询
-        const account = await emailService.getByEmail(email);
-        if (!account) {
-            throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
-        }
-
-        return { ...account, autoAssigned: false };
-    },
-
     /**
      * 更新邮箱状态
      */
@@ -338,22 +298,48 @@ export const mailService = {
         limit: number = 100
     ): Promise<EmailMessage[]> {
         return new Promise((resolve, reject) => {
+            let settled = false;
+            const settle = (fn: () => void) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(hardTimer);
+                fn();
+            };
+            const settleResolve = (messages: EmailMessage[]) => settle(() => resolve(messages));
+            const settleReject = (err: unknown) => settle(() => reject(err));
+
             const imapConfig: ConstructorParameters<typeof Imap>[0] = {
                 user: email,
                 password: '',
                 xoauth2: authString,
-                host: 'outlook.office365.com',
+                host: IMAP_HOST,
                 port: 993,
                 tls: true,
+                connTimeout: IMAP_TIMEOUT_MS,
+                authTimeout: IMAP_TIMEOUT_MS,
                 tlsOptions: {
-                    rejectUnauthorized: false,
+                    servername: IMAP_HOST,
                 },
             };
             const imap = new Imap(imapConfig);
 
+            const hardTimer = setTimeout(() => {
+                logger.error({ email }, 'IMAP fetch timed out');
+                imap.end();
+                settleReject(new Error('IMAP fetch timed out'));
+            }, IMAP_HARD_TIMEOUT_MS);
+
             const emailList: EmailMessage[] = [];
-            let messageCount = 0;
-            let processedCount = 0;
+            let fetchEnded = false;
+            let pendingParses = 0;
+
+            const maybeFinish = () => {
+                if (fetchEnded && pendingParses === 0) {
+                    imap.end();
+                }
+            };
 
             imap.once('ready', async () => {
                 try {
@@ -367,27 +353,27 @@ export const mailService = {
                     imap.search(['ALL'], (err: Error | null, results: number[]) => {
                         if (err) {
                             imap.end();
-                            return reject(err);
+                            return settleReject(err);
                         }
 
                         if (!results || results.length === 0) {
                             imap.end();
-                            return resolve([]);
+                            return settleResolve([]);
                         }
 
                         // 限制返回数量
                         const limitedResults = results.slice(-limit);
-                        messageCount = limitedResults.length;
 
                         const f = imap.fetch(limitedResults, { bodies: '' });
 
                         f.on('message', (msg) => {
                             msg.on('body', (stream) => {
+                                pendingParses += 1;
                                 simpleParser(stream as unknown as Source)
                                     .then((mail: ParsedMail) => {
                                         const html = typeof mail.html === 'string' ? mail.html : '';
                                         emailList.push({
-                                            id: `imap_${Date.now()}_${processedCount}`,
+                                            id: `imap_${Date.now()}_${emailList.length}`,
                                             from: mail.from?.text || '',
                                             subject: mail.subject || '',
                                             text: mail.text || '',
@@ -399,36 +385,32 @@ export const mailService = {
                                         logger.error({ parseErr }, 'Error parsing email');
                                     })
                                     .finally(() => {
-                                        processedCount++;
-                                        if (processedCount === messageCount) {
-                                            imap.end();
-                                        }
+                                        pendingParses -= 1;
+                                        maybeFinish();
                                     });
                             });
                         });
 
                         f.once('error', (fetchErr: Error) => {
                             logger.error({ fetchErr }, 'IMAP fetch error');
+                            settleReject(fetchErr);
                             imap.end();
-                            reject(fetchErr);
                         });
 
                         f.once('end', () => {
-                            // 如果没有消息，直接结束
-                            if (messageCount === 0) {
-                                imap.end();
-                            }
+                            fetchEnded = true;
+                            maybeFinish();
                         });
                     });
                 } catch (err) {
                     imap.end();
-                    reject(err);
+                    settleReject(err);
                 }
             });
 
             imap.once('error', (err: Error) => {
                 logger.error({ err }, 'IMAP connection error');
-                reject(err);
+                settleReject(err);
             });
 
             imap.once('end', () => {
@@ -439,7 +421,7 @@ export const mailService = {
                     const dateB = b.date ? new Date(b.date).getTime() : 0;
                     return dateB - dateA;
                 });
-                resolve(emailList);
+                settleResolve(emailList);
             });
 
             imap.connect();
@@ -581,10 +563,10 @@ export const mailService = {
                 const batchSize = 10;
                 for (let i = 0; i < messages.length; i += batchSize) {
                     const chunk = messages.slice(i, i + batchSize);
-                    await Promise.all(chunk.map(msg =>
+                    const results = await Promise.all(chunk.map(msg =>
                         this.deleteMessageViaGraphApi(tokenResult.accessToken, msg.id, proxyConfig)
                     ));
-                    deletedCount += chunk.length;
+                    deletedCount += results.filter(Boolean).length;
                 }
 
                 page++;
@@ -611,15 +593,15 @@ export const mailService = {
     },
 
     /**
-     * 单个删除邮件
+     * 单个删除邮件，返回是否删除成功
      */
     async deleteMessageViaGraphApi(
         accessToken: string,
         messageId: string,
         proxyConfig?: { socks5?: string; http?: string }
-    ) {
+    ): Promise<boolean> {
         try {
-            await proxyFetch(
+            const response = await proxyFetch(
                 `https://graph.microsoft.com/v1.0/me/messages/${messageId}`,
                 {
                     method: 'DELETE',
@@ -629,9 +611,10 @@ export const mailService = {
                 },
                 proxyConfig
             );
+            return response.ok;
         } catch (_err) {
-            // 忽略删除错误，继续下一个
             logger.warn({ messageId }, 'Failed to delete message');
+            return false;
         }
     },
 };

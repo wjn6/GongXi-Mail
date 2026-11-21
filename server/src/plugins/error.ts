@@ -61,7 +61,7 @@ const errorPlugin: FastifyPluginAsync = async (fastify) => {
             success: false,
             requestId: request.id,
             error: {
-                code: 'INTERNAL_ERROR',
+                code: typeof error.code === 'string' && error.code ? error.code : 'INTERNAL_ERROR',
                 message: statusCode === 500 ? 'Internal server error' : error.message,
             },
         });

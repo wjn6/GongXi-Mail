@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
+import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -51,6 +52,13 @@ export async function buildApp() {
     });
 
     await fastify.register(fastifyCookie);
+
+    // 全局 IP 限流（/api/* 路由自行关闭，改用按 Key 限流）
+    await fastify.register(fastifyRateLimit, {
+        global: true,
+        max: 300,
+        timeWindow: '1 minute',
+    });
 
     // 自定义插件
     await fastify.register(errorPlugin);
