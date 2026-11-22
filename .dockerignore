@@ -47,3 +47,5 @@ services/
 middlewares/
 utils/
 sql/
+# Runtime secrets bootstrap (entrypoint-generated)
+data/

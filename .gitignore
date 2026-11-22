@@ -35,3 +35,5 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+# Runtime secrets bootstrap (entrypoint-generated)
+data/

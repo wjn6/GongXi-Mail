@@ -27,6 +27,7 @@ services:
       - app-network
     volumes:
       - app_logs:/app/server/logs
+      - app_data:/app/server/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
       interval: 30s
@@ -75,5 +76,6 @@ networks:
 
 volumes:
   app_logs:
+  app_data:
   redis_data:
   postgres_data:

@@ -42,7 +42,7 @@ COPY --from=builder /app/web/dist ./public
 # Set working directory to server
 WORKDIR /app/server
 
-# Apply migrations (auto-baselines legacy db-push databases), then start server
-CMD ["sh", "-c", "node scripts/migrate-up.mjs && node dist/index.js"]
+# Entrypoint: ensure secrets, apply migrations, then start the server
+CMD ["node", "scripts/entrypoint.mjs"]
 
 EXPOSE 3000

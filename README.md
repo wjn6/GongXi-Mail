@@ -29,7 +29,11 @@
 
 ### Docker 部署
 
-生产环境请先注入密钥（不要写死在仓库）：
+密钥无需手动准备：首次启动自动生成 `JWT_SECRET`、`ENCRYPTION_KEY` 和一个强随机的 `ADMIN_PASSWORD`，
+持久化到 `app_data` 卷中的 `data/bootstrap-secrets.json`（重启与重建容器后保持不变），
+初始管理员密码只在首次启动日志里打印一次，可随时 `docker compose logs app | grep "initial admin password"` 找回。
+
+如需固定密钥（例如多实例共享），在启动前显式注入环境变量，显式值永远优先于自动生成：
 
 ```bash
 export JWT_SECRET="replace-with-at-least-32-char-random-secret"
@@ -44,6 +48,9 @@ docker-compose up -d --build
 ```
 
 访问 http://localhost:3000
+
+> 注意：`app_data` 卷里存有加密数据所依赖的 `ENCRYPTION_KEY`，删除该卷会导致已入库的
+> refresh token 无法解密，请像对待数据库卷一样对待它。
 
 ### 健康检查
 
@@ -189,7 +196,7 @@ API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`�
 
 ## 生产配置要求
 
-- `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 必须通过外部环境变量注入。
+- `JWT_SECRET`、`ENCRYPTION_KEY`、`ADMIN_PASSWORD` 可以不设置——首次启动会自动生成并持久化到 `app_data` 卷；多实例部署或需要固定值时才必须显式注入。
 - 如启用 2FA，`ADMIN_2FA_SECRET` 也必须通过外部环境变量注入。
 - 不要在 `docker-compose.yml`、`.env`、代码仓库中写死生产密钥。
 - `server/.env.example` 仅作为模板，不能直接用于生产。
