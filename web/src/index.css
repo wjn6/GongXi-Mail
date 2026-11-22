@@ -10,12 +10,19 @@ body,
   height: 100%;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
-    'Noto Color Emoji';
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+  background: #f5f7fa;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* 滚动条样式 */
@@ -35,4 +42,124 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* ============ 通用工具类 ============ */
+
+/* 页面顶部：标题 + 操作区，窄屏自动换行 */
+.gx-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 16px;
+}
+
+.gx-page-head h4.ant-typography {
+  margin: 0 !important;
+}
+
+/* 工具栏：筛选区 + 按钮区 */
+.gx-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.gx-toolbar-filters,
+.gx-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 移动端卡片列表 */
+.gx-mobile-card {
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+
+.gx-mobile-card + .gx-mobile-card {
+  margin-top: 10px;
+}
+
+.gx-mobile-card.is-selected {
+  border-color: #91caff;
+  background: #f0f7ff;
+}
+
+/* ============ 手机端适配 ============ */
+@media (max-width: 767.98px) {
+  .gx-hide-mobile {
+    display: none !important;
+  }
+
+  .gx-toolbar,
+  .gx-toolbar-filters,
+  .gx-toolbar-actions {
+    width: 100%;
+  }
+
+  .gx-toolbar-filters > * {
+    flex: 1 1 140px;
+    min-width: 0;
+    width: auto !important;
+  }
+
+  .gx-toolbar-actions > .ant-btn {
+    flex: 1 1 auto;
+  }
+
+  /* 弹窗贴边显示，正文可滚动 */
+  .ant-modal {
+    top: 8px !important;
+    margin: 0 auto !important;
+    padding-bottom: 8px !important;
+  }
+
+  .ant-modal .ant-modal-container {
+    padding: 16px !important;
+  }
+
+  .ant-modal .ant-modal-body {
+    max-height: calc(100vh - 150px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ant-card .ant-card-head {
+    padding: 0 12px;
+    min-height: 44px;
+  }
+
+  .ant-card .ant-card-body {
+    padding: 12px;
+  }
+
+  .ant-tabs-nav {
+    margin-bottom: 12px !important;
+  }
+
+  /* 分页在窄屏居中并换行 */
+  .ant-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 8px;
+  }
+
+  .ant-table-wrapper .ant-table-pagination.ant-pagination {
+    justify-content: center;
+  }
+
+  .ant-table-wrapper .ant-table-thead > tr > th,
+  .ant-table-wrapper .ant-table-tbody > tr > td {
+    white-space: nowrap;
+  }
 }

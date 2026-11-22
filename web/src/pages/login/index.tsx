@@ -88,16 +88,37 @@ const LoginPage: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: '#f0f2f5',
+                padding: 16,
+                background: 'radial-gradient(1200px 600px at 10% -10%, #e6f0ff 0%, transparent 60%), radial-gradient(900px 500px at 110% 110%, #f3e8ff 0%, transparent 55%), #f5f7fa',
             }}
         >
             <Card
+                variant="borderless"
                 style={{
-                    width: 380,
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                    width: '100%',
+                    maxWidth: 380,
+                    borderRadius: 16,
+                    boxShadow: '0 12px 32px rgba(15, 35, 95, 0.08)',
                 }}
             >
                 <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                    <div
+                        style={{
+                            width: 48,
+                            height: 48,
+                            margin: '0 auto 12px',
+                            borderRadius: 12,
+                            background: 'linear-gradient(135deg, #1677ff, #722ed1)',
+                            color: '#fff',
+                            fontWeight: 700,
+                            fontSize: 18,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                        }}
+                    >
+                        GX
+                    </div>
                     <Title level={3} style={{ margin: '0 0 8px 0' }}>
                         GongXi 邮箱
                     </Title>
@@ -116,6 +137,10 @@ const LoginPage: React.FC = () => {
                         <Input
                             prefix={<UserOutlined />}
                             placeholder="用户名"
+                            autoComplete="username"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
                         />
                     </Form.Item>
 
@@ -126,6 +151,7 @@ const LoginPage: React.FC = () => {
                         <Input.Password
                             prefix={<LockOutlined />}
                             placeholder="密码"
+                            autoComplete="current-password"
                         />
                     </Form.Item>
 
@@ -162,16 +188,22 @@ const LoginPage: React.FC = () => {
                 okText="验证并登录"
                 cancelText="取消"
                 confirmLoading={otpLoading}
-                destroyOnClose
+                destroyOnHidden
             >
                 <Space direction="vertical" style={{ width: '100%' }}>
                     <Text type="secondary">请输入验证器中的 6 位动态码</Text>
                     <Input
                         value={otpCode}
                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        onPressEnter={() => void handleOtpConfirm()}
                         prefix={<SafetyCertificateOutlined />}
                         maxLength={6}
                         placeholder="6 位验证码"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        autoFocus
+                        size="large"
+                        style={{ letterSpacing: 4 }}
                     />
                 </Space>
             </Modal>

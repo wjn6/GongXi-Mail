@@ -62,8 +62,23 @@ const App: React.FC = () => {
       theme={{
         cssVar: {},
         token: {
-          colorPrimary: '#1890ff',
-          borderRadius: 6,
+          colorPrimary: '#1677ff',
+          borderRadius: 8,
+          colorBgLayout: '#f5f7fa',
+          fontSize: 14,
+        },
+        components: {
+          Layout: {
+            headerBg: '#ffffff',
+            siderBg: '#ffffff',
+          },
+          Table: {
+            headerBg: '#fafbfc',
+            rowHoverBg: '#f5f9ff',
+          },
+          Card: {
+            headerFontSize: 15,
+          },
         },
       }}
     >

@@ -15,8 +15,8 @@ export const adminService = {
         const where = keyword
             ? {
                 OR: [
-                    { username: { contains: keyword } },
-                    { email: { contains: keyword } },
+                    { username: { contains: keyword, mode: 'insensitive' as const } },
+                    { email: { contains: keyword, mode: 'insensitive' as const } },
                 ],
             }
             : {};

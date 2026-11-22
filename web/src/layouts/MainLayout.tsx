@@ -1,14 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import {
     Layout,
     Menu,
     Avatar,
     Dropdown,
+    Drawer,
     theme,
     Typography,
     Space,
     Breadcrumb,
+    Button,
 } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -20,6 +22,7 @@ import {
     LogoutOutlined,
     MenuFoldOutlined,
     MenuUnfoldOutlined,
+    MenuOutlined,
     FileTextOutlined,
     HistoryOutlined,
     FileSearchOutlined,
@@ -27,9 +30,16 @@ import {
 import { useAuthStore } from '../stores/authStore';
 import { authApi } from '../api';
 import { isSuperAdmin } from '../utils/auth';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
+
+const SIDER_WIDTH = 208;
+const SIDER_COLLAPSED_WIDTH = 80;
+const HEADER_HEIGHT = 56;
+const COLLAPSED_STORAGE_KEY = 'gx.sider.collapsed';
+const APP_NAME = '廾匸邮箱';
 
 const menuConfig = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '数据概览', title: '数据概览' },
@@ -42,23 +52,76 @@ const menuConfig = [
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置', title: '系统设置' },
 ];
 
+const readCollapsed = (): boolean => {
+    try {
+        return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const Logo: React.FC<{ showText: boolean; primary: string }> = ({ showText, primary }) => (
+    <Space>
+        <div
+            style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: `linear-gradient(135deg, ${primary}, #722ed1)`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#fff',
+                fontWeight: 600,
+                flexShrink: 0,
+            }}
+        >
+            GX
+        </div>
+        {showText && <Text strong style={{ fontSize: 16, whiteSpace: 'nowrap' }}>{APP_NAME}</Text>}
+    </Space>
+);
+
 const MainLayout: React.FC = () => {
-    const [collapsed, setCollapsed] = useState(false);
+    const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
+    const [drawerOpen, setDrawerOpen] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
     const { admin, clearAuth } = useAuthStore();
     const { token } = theme.useToken();
+    const isMobile = useIsMobile();
 
     const hasSuperAdminPermission = isSuperAdmin(admin?.role);
     const displayName = admin?.username?.trim() || 'Admin';
     const avatarText = displayName.charAt(0).toUpperCase();
-    const menuItems: MenuProps['items'] = menuConfig
-        .filter(item => !item.superAdmin || hasSuperAdminPermission)
-        .map(item => ({
-            key: item.key,
-            icon: item.icon,
-            label: <Link to={item.key}>{item.label}</Link>,
-        }));
+
+    const menuItems: MenuProps['items'] = useMemo(
+        () =>
+            menuConfig
+                .filter(item => !item.superAdmin || hasSuperAdminPermission)
+                .map(item => ({
+                    key: item.key,
+                    icon: item.icon,
+                    label: <Link to={item.key}>{item.label}</Link>,
+                })),
+        [hasSuperAdminPermission]
+    );
+
+    const currentMenu = menuConfig.find(item => location.pathname.startsWith(item.key));
+    const pageTitle = currentMenu?.title || '管理后台';
+    const selectedKeys = currentMenu ? [currentMenu.key] : [];
+
+    useEffect(() => {
+        document.title = `${pageTitle} - ${APP_NAME}`;
+    }, [pageTitle]);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+        } catch {
+            // ignore storage errors (private mode etc.)
+        }
+    }, [collapsed]);
 
     const handleLogout = async () => {
         try {
@@ -71,6 +134,20 @@ const MainLayout: React.FC = () => {
     };
 
     const userMenuItems: MenuProps['items'] = [
+        {
+            key: 'user',
+            label: (
+                <div style={{ minWidth: 140 }}>
+                    <Text strong>{displayName}</Text>
+                    <br />
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                        {hasSuperAdminPermission ? '超级管理员' : '管理员'}
+                    </Text>
+                </div>
+            ),
+            disabled: true,
+        },
+        { type: 'divider' },
         {
             key: 'profile',
             icon: <UserOutlined />,
@@ -87,116 +164,119 @@ const MainLayout: React.FC = () => {
         },
     ];
 
-    const currentMenu = menuConfig.find(item => location.pathname.startsWith(item.key));
-    const pageTitle = currentMenu?.title || '管理后台';
+    const navMenu = (
+        <Menu
+            theme="light"
+            mode="inline"
+            selectedKeys={selectedKeys}
+            items={menuItems}
+            onClick={() => setDrawerOpen(false)}
+            style={{ borderInlineEnd: 0, marginTop: 8 }}
+        />
+    );
 
-    const selectedKeys = menuConfig
-        .filter(item => location.pathname.startsWith(item.key))
-        .map(item => item.key);
+    const siderOffset = isMobile ? 0 : collapsed ? SIDER_COLLAPSED_WIDTH : SIDER_WIDTH;
 
     return (
         <Layout style={{ minHeight: '100vh' }}>
-            <Sider
-                trigger={null}
-                collapsible
-                collapsed={collapsed}
-                theme="light"
-                width={208}
-                style={{
-                    overflow: 'auto',
-                    height: '100vh',
-                    position: 'fixed',
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    borderRight: '1px solid #f0f0f0',
-                }}
-            >
-                <div
+            {isMobile ? (
+                <Drawer
+                    open={drawerOpen}
+                    placement="left"
+                    size={240}
+                    onClose={() => setDrawerOpen(false)}
+                    closable={false}
+                    styles={{ body: { padding: 0 } }}
+                    title={<Logo showText primary={token.colorPrimary} />}
+                >
+                    {navMenu}
+                </Drawer>
+            ) : (
+                <Sider
+                    trigger={null}
+                    collapsible
+                    collapsed={collapsed}
+                    theme="light"
+                    width={SIDER_WIDTH}
+                    collapsedWidth={SIDER_COLLAPSED_WIDTH}
                     style={{
-                        height: 64,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderBottom: '1px solid #f0f0f0',
+                        overflow: 'auto',
+                        height: '100vh',
+                        position: 'fixed',
+                        insetInlineStart: 0,
+                        top: 0,
+                        bottom: 0,
+                        zIndex: 20,
+                        borderInlineEnd: `1px solid ${token.colorBorderSecondary}`,
                     }}
                 >
-                    <Space>
-                        <div
-                            style={{
-                                width: 32,
-                                height: 32,
-                                borderRadius: 8,
-                                background: '#1890ff',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: '#fff',
-                                fontWeight: 600,
-                            }}
-                        >
-                            GX
-                        </div>
-                        {!collapsed && (
-                            <Text strong style={{ fontSize: 16 }}>廾匸邮箱</Text>
-                        )}
-                    </Space>
-                </div>
-                <Menu
-                    theme="light"
-                    mode="inline"
-                    selectedKeys={selectedKeys}
-                    items={menuItems}
-                    style={{ borderRight: 0, marginTop: 8 }}
-                />
-            </Sider>
+                    <div
+                        style={{
+                            height: HEADER_HEIGHT,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                        }}
+                    >
+                        <Logo showText={!collapsed} primary={token.colorPrimary} />
+                    </div>
+                    {navMenu}
+                </Sider>
+            )}
 
-            <Layout style={{ marginLeft: collapsed ? 80 : 208, transition: 'margin-left 0.2s ease' }}>
+            <Layout style={{ marginInlineStart: siderOffset, transition: 'margin 0.2s ease' }}>
                 <Header
                     style={{
-                        padding: '0 24px',
-                        background: '#fff',
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 10,
+                        padding: isMobile ? '0 8px' : '0 24px',
+                        background: 'rgba(255, 255, 255, 0.92)',
+                        backdropFilter: 'saturate(180%) blur(8px)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        borderBottom: '1px solid #f0f0f0',
-                        height: 56,
-                        lineHeight: '56px',
+                        gap: 8,
+                        borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                        height: HEADER_HEIGHT,
+                        lineHeight: `${HEADER_HEIGHT}px`,
                     }}
                 >
-                    <Space>
-                        <span
-                            onClick={() => setCollapsed(!collapsed)}
-                            style={{ fontSize: 16, cursor: 'pointer', color: '#595959' }}
-                        >
-                            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                        </span>
-                        <Breadcrumb
-                            items={[
-                                { title: '首页' },
-                                { title: pageTitle },
-                            ]}
-                            style={{ marginLeft: 16 }}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 12, minWidth: 0 }}>
+                        <Button
+                            type="text"
+                            aria-label={isMobile ? '打开菜单' : collapsed ? '展开侧边栏' : '收起侧边栏'}
+                            icon={isMobile ? <MenuOutlined /> : collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                            onClick={() => (isMobile ? setDrawerOpen(true) : setCollapsed(!collapsed))}
                         />
-                    </Space>
+                        {isMobile ? (
+                            <Text strong ellipsis style={{ fontSize: 16 }}>{pageTitle}</Text>
+                        ) : (
+                            <Breadcrumb items={[{ title: <Link to="/dashboard">首页</Link> }, { title: pageTitle }]} />
+                        )}
+                    </div>
 
-                    <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-                        <Space style={{ cursor: 'pointer' }}>
-                            <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
-                                {avatarText}
-                            </Avatar>
-                            <Text>{displayName}</Text>
-                        </Space>
+                    <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
+                        <Button type="text" style={{ height: 40, paddingInline: isMobile ? 4 : 8 }}>
+                            <Space size={8}>
+                                <Avatar size="small" style={{ backgroundColor: token.colorPrimary }}>
+                                    {avatarText}
+                                </Avatar>
+                                {!isMobile && <Text>{displayName}</Text>}
+                            </Space>
+                        </Button>
                     </Dropdown>
                 </Header>
 
                 <Content
                     style={{
-                        margin: 24,
-                        padding: 24,
-                        background: '#fff',
+                        margin: isMobile ? 8 : 24,
+                        padding: isMobile ? 12 : 24,
+                        background: token.colorBgContainer,
                         borderRadius: token.borderRadiusLG,
-                        minHeight: 'calc(100vh - 56px - 48px)',
+                        minHeight: `calc(100vh - ${HEADER_HEIGHT}px - ${isMobile ? 16 : 48}px)`,
+                        minWidth: 0,
                     }}
                 >
                     <Outlet />

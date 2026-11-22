@@ -483,11 +483,15 @@ const ApiKeysPage: React.FC = () => {
             width: 120,
             render: (val) => {
                 if (!val) return <Text type="secondary">永不过期</Text>;
-                const isExpired = dayjs(val).isBefore(dayjs());
+                const expiresAt = dayjs(val);
+                const isExpired = expiresAt.isBefore(dayjs());
+                const expiringSoon = !isExpired && expiresAt.diff(dayjs(), 'day', true) <= 7;
                 return (
-                    <Text type={isExpired ? 'danger' : undefined}>
-                        {dayjs(val).format('YYYY-MM-DD')}
-                    </Text>
+                    <Tooltip title={isExpired ? '已过期' : expiringSoon ? `${Math.max(1, Math.ceil(expiresAt.diff(dayjs(), 'day', true)))} 天内过期（${expiresAt.format('YYYY-MM-DD HH:mm')}）` : undefined}>
+                        <Text type={isExpired ? 'danger' : expiringSoon ? 'warning' : undefined}>
+                            {expiresAt.format('YYYY-MM-DD')}
+                        </Text>
+                    </Tooltip>
                 );
             },
         },
@@ -502,8 +506,9 @@ const ApiKeysPage: React.FC = () => {
             title: '操作',
             key: 'action',
             width: 180,
+            fixed: 'right',
             render: (_, record) => (
-                <Space size="small">
+                <Space size={0}>
                     <Tooltip title="邮箱池">
                         <Button
                             type="text"
@@ -648,11 +653,11 @@ const ApiKeysPage: React.FC = () => {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div className="gx-page-head">
                 <Title level={4} style={{ margin: 0 }}>
                     API Key 管理
                 </Title>
-                <Space>
+                <Space wrap>
                     <Button icon={<ReloadOutlined />} onClick={fetchData}>
                         刷新
                     </Button>
@@ -681,7 +686,7 @@ const ApiKeysPage: React.FC = () => {
                     setAllowedEmailKeyword('');
                     setModalVisible(false);
                 }}
-                destroyOnClose
+                destroyOnHidden
                 width={640}
             >
                 <Spin spinning={apiKeyDetailLoading}>
@@ -728,7 +733,7 @@ const ApiKeysPage: React.FC = () => {
                     >
                         <Checkbox.Group
                             options={permissionActionOptions}
-                            style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', rowGap: 8 }}
+                            style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', rowGap: 8 }}
                         />
                     </Form.Item>
                     <Form.Item
@@ -847,7 +852,7 @@ const ApiKeysPage: React.FC = () => {
                 open={newKeyModalVisible}
                 onOk={() => setNewKeyModalVisible(false)}
                 onCancel={() => setNewKeyModalVisible(false)}
-                destroyOnClose
+                destroyOnHidden
                 footer={[
                     <Button key="close" onClick={() => setNewKeyModalVisible(false)}>
                         关闭
@@ -888,15 +893,15 @@ const ApiKeysPage: React.FC = () => {
                     open={poolModalVisible}
                     onCancel={() => setPoolModalVisible(false)}
                     footer={null}
-                    destroyOnClose
+                    destroyOnHidden
                     width={500}
                 >
                     {poolLoading ? (
                         <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
                     ) : poolStats ? (
                         <div>
-                            <div style={{ marginBottom: 16 }}>
-                                <Text type="secondary" style={{ marginRight: 8 }}>按分组筛选：</Text>
+                            <div style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                                <Text type="secondary">按分组筛选：</Text>
                                 <Select
                                     allowClear
                                     placeholder="全部分组"
@@ -997,7 +1002,7 @@ const ApiKeysPage: React.FC = () => {
                     okText="保存"
                     cancelText="取消"
                     confirmLoading={savingEmails}
-                    destroyOnClose
+                    destroyOnHidden
                     width={600}
                 >
                     {emailLoading ? (
@@ -1007,7 +1012,7 @@ const ApiKeysPage: React.FC = () => {
                     ) : (
                         <div>
                             <div style={{ marginBottom: 16 }}>
-                                <Space>
+                                <Space wrap>
                                     <Text type="secondary">按分组筛选：</Text>
                                     <Select
                                         allowClear
@@ -1034,7 +1039,7 @@ const ApiKeysPage: React.FC = () => {
                                 </Text>
                             </div>
                             <div style={{ marginBottom: 16 }}>
-                                <Space>
+                                <Space wrap>
                                     <Button
                                         size="small"
                                         onClick={() => {
@@ -1068,8 +1073,8 @@ const ApiKeysPage: React.FC = () => {
                                 >
                                     <Row>
                                         {filteredEmailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
-                                            <Col span={12} key={email.id} style={{ marginBottom: 8 }}>
-                                                <Checkbox value={email.id}>
+                                            <Col xs={24} sm={12} key={email.id} style={{ marginBottom: 8, minWidth: 0 }}>
+                                                <Checkbox value={email.id} style={{ wordBreak: 'break-all' }}>
                                                     {email.email}
                                                     {email.groupName && (
                                                         <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>{email.groupName}</Tag>

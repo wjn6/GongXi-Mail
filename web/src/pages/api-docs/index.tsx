@@ -318,6 +318,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
           style={{ marginBottom: 16 }}
         />
         <Table
+            scroll={{ x: 'max-content' }}
           dataSource={authMethods}
           columns={[
             { title: '方式', dataIndex: 'method', key: 'method' },
@@ -346,6 +347,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
           style={{ marginBottom: 16 }}
         />
         <Table
+            scroll={{ x: 'max-content' }}
           dataSource={[
             { key: 'JWT_SECRET', name: 'JWT_SECRET', requirement: '至少 32 字符，随机强密钥' },
             { key: 'ENCRYPTION_KEY', name: 'ENCRYPTION_KEY', requirement: '固定 32 字符，用于敏感字段加密' },
@@ -363,6 +365,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
 
       <Card title="枚举约定" style={{ marginBottom: 24 }}>
         <Table
+            scroll={{ x: 'max-content' }}
           dataSource={enumRules}
           columns={[
             { title: '类型', dataIndex: 'name', key: 'name' },
@@ -383,6 +386,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
           style={{ marginBottom: 16 }}
         />
         <Table
+            scroll={{ x: 'max-content' }}
           dataSource={logActionRows}
           columns={[
             { title: 'Action', dataIndex: 'action', key: 'action', render: (value: string) => <Text code>{value}</Text> },
@@ -412,6 +416,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
                   <>
                     <Title level={5} style={{ marginTop: 16 }}>请求参数</Title>
                     <Table
+                        scroll={{ x: 'max-content' }}
                       dataSource={api.params}
                       columns={paramColumns}
                       pagination={false}
@@ -430,7 +435,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
 
                 <Title level={5} style={{ marginTop: 24 }}>响应示例</Title>
                 <Row gutter={16}>
-                  <Col span={12}>
+                  <Col xs={24} md={12}>
                     <Text strong style={{ color: '#52c41a' }}>成功响应</Text>
                     <Card size="small" style={{ background: '#f6ffed', marginTop: 8 }}>
                       <Text code style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
@@ -438,7 +443,7 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
                       </Text>
                     </Card>
                   </Col>
-                  <Col span={12}>
+                  <Col xs={24} md={12}>
                     <Text strong style={{ color: '#ff4d4f' }}>错误响应</Text>
                     <Card size="small" style={{ background: '#fff2f0', marginTop: 8 }}>
                       <Text code style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>

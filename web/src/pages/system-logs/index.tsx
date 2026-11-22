@@ -150,7 +150,7 @@ const SystemLogsPage: React.FC = () => {
                 )}
             />
 
-            <Card bordered={false}>
+            <Card variant="borderless">
                 <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                     <Alert
                         type="info"
@@ -183,6 +183,7 @@ const SystemLogsPage: React.FC = () => {
                     </Space>
 
                     <Table
+                        scroll={{ x: 'max-content' }}
                         rowKey="id"
                         dataSource={logs}
                         columns={columns}

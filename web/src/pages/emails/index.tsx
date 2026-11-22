@@ -18,6 +18,11 @@ import {
     List,
     Tabs,
     Spin,
+    Checkbox,
+    Dropdown,
+    Empty,
+    Pagination,
+    Segmented,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -31,11 +36,16 @@ import {
     MailOutlined,
     GroupOutlined,
     SyncOutlined,
+    MoreOutlined,
+    ReloadOutlined,
+    CopyOutlined,
 } from '@ant-design/icons';
 import { emailApi, groupApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import { buildMailPreview, extractVerificationCode } from '../../utils/mail';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -48,6 +58,21 @@ const MAIL_FETCH_STRATEGY_OPTIONS = [
 ] as const;
 
 type MailFetchStrategy = (typeof MAIL_FETCH_STRATEGY_OPTIONS)[number]['value'];
+
+type EmailStatus = 'ACTIVE' | 'ERROR' | 'DISABLED';
+
+const EMAIL_STATUS_META: Record<EmailStatus, { color: string; label: string }> = {
+    ACTIVE: { color: 'green', label: '正常' },
+    ERROR: { color: 'red', label: '异常' },
+    DISABLED: { color: 'default', label: '禁用' },
+};
+
+const EMAIL_STATUS_OPTIONS = (Object.keys(EMAIL_STATUS_META) as EmailStatus[]).map((value) => ({
+    value,
+    label: EMAIL_STATUS_META[value].label,
+}));
+
+const formatDateTime = (val: string | null | undefined) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm') : '-');
 
 const MAIL_FETCH_STRATEGY_LABELS: Record<MailFetchStrategy, string> = {
     GRAPH_FIRST: 'Graph 优先',
@@ -70,7 +95,7 @@ interface EmailAccount {
     id: number;
     email: string;
     clientId: string;
-    status: 'ACTIVE' | 'ERROR' | 'DISABLED';
+    status: EmailStatus;
     groupId: number | null;
     group: { id: number; name: string } | null;
     lastCheckAt: string | null;
@@ -93,12 +118,27 @@ interface MailItem {
     date: string;
 }
 
+interface MailViewItem extends MailItem {
+    preview: string;
+    code: string | null;
+}
+
+const renderEmailStatusTag = (record: Pick<EmailAccount, 'status' | 'errorMessage'>) => {
+    const meta = EMAIL_STATUS_META[record.status] ?? { color: 'default', label: record.status };
+    const tag = <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.label}</Tag>;
+    if (record.status === 'ERROR' && record.errorMessage) {
+        return <Tooltip title={record.errorMessage}>{tag}</Tooltip>;
+    }
+    return tag;
+};
+
 interface EmailDetailsResult extends EmailAccount {
     refreshToken: string;
 }
 
 const EmailsPage: React.FC = () => {
     const { admin } = useAuthStore();
+    const isMobile = useIsMobile();
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<EmailAccount[]>([]);
     const [total, setTotal] = useState(0);
@@ -112,6 +152,7 @@ const EmailsPage: React.FC = () => {
     const [keyword, setKeyword] = useState('');
     const [debouncedKeyword, setDebouncedKeyword] = useState('');
     const [filterGroupId, setFilterGroupId] = useState<number | undefined>(undefined);
+    const [filterStatus, setFilterStatus] = useState<EmailStatus | undefined>(undefined);
     const [importContent, setImportContent] = useState('');
     const [separator, setSeparator] = useState('----');
     const [importGroupId, setImportGroupId] = useState<number | undefined>(undefined);
@@ -123,6 +164,7 @@ const EmailsPage: React.FC = () => {
     const [emailDetailVisible, setEmailDetailVisible] = useState(false);
     const [emailDetailContent, setEmailDetailContent] = useState<string>('');
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
+    const [emailDetailItem, setEmailDetailItem] = useState<MailViewItem | null>(null);
     const [emailEditLoading, setEmailEditLoading] = useState(false);
     const [form] = Form.useForm();
 
@@ -159,8 +201,9 @@ const EmailsPage: React.FC = () => {
     const fetchData = useCallback(async () => {
         const currentRequestId = ++latestListRequestIdRef.current;
         setLoading(true);
-        const params: { page: number; pageSize: number; keyword: string; groupId?: number } = { page, pageSize, keyword: debouncedKeyword };
+        const params: { page: number; pageSize: number; keyword: string; groupId?: number; status?: EmailStatus } = { page, pageSize, keyword: debouncedKeyword };
         if (filterGroupId !== undefined) params.groupId = filterGroupId;
+        if (filterStatus !== undefined) params.status = filterStatus;
 
         const result = await requestData<EmailListResult>(
             () => emailApi.getList(params),
@@ -174,7 +217,7 @@ const EmailsPage: React.FC = () => {
             setTotal(result.total);
         }
         setLoading(false);
-    }, [debouncedKeyword, filterGroupId, page, pageSize]);
+    }, [debouncedKeyword, filterGroupId, filterStatus, page, pageSize]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -184,11 +227,17 @@ const EmailsPage: React.FC = () => {
     }, [fetchGroups]);
 
     useEffect(() => {
+        const next = keyword.trim();
+        if (next === debouncedKeyword) {
+            return;
+        }
         const timer = window.setTimeout(() => {
-            setDebouncedKeyword(keyword.trim());
+            // 关键词变化时回到第一页，避免停留在超出结果范围的页码
+            setDebouncedKeyword(next);
+            setPage(1);
         }, 300);
         return () => window.clearTimeout(timer);
-    }, [keyword]);
+    }, [keyword, debouncedKeyword]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -380,6 +429,13 @@ const EmailsPage: React.FC = () => {
         await loadMails(record.id, mailbox);
     }, [loadMails]);
 
+    const handleSwitchMailbox = async (mailbox: string) => {
+        if (!currentEmailId || mailbox === currentMailbox) return;
+        setCurrentMailbox(mailbox);
+        setMailList([]);
+        await loadMails(currentEmailId, mailbox);
+    };
+
     const handleRefreshMails = async () => {
         if (!currentEmailId) return;
         await loadMails(currentEmailId, currentMailbox, true);
@@ -441,7 +497,8 @@ const EmailsPage: React.FC = () => {
         }
     };
 
-    const handleViewEmailDetail = (record: MailItem) => {
+    const handleViewEmailDetail = (record: MailViewItem) => {
+        setEmailDetailItem(record);
         setEmailDetailSubject(record.subject || '无主题');
         setEmailDetailContent(record.html || record.text || '无内容');
         setEmailDetailVisible(true);
@@ -558,12 +615,19 @@ const EmailsPage: React.FC = () => {
             title: '邮箱',
             dataIndex: 'email',
             key: 'email',
+            width: 260,
             ellipsis: true,
+            render: (email: string) => (
+                <Text copyable={{ text: email, tooltips: ['复制邮箱', '已复制'] }} ellipsis style={{ maxWidth: '100%' }}>
+                    {email}
+                </Text>
+            ),
         },
         {
             title: '客户端 ID',
             dataIndex: 'clientId',
             key: 'clientId',
+            width: 200,
             ellipsis: true,
         },
         {
@@ -579,33 +643,21 @@ const EmailsPage: React.FC = () => {
             dataIndex: 'status',
             key: 'status',
             width: 100,
-            render: (status: string) => {
-                const colors: Record<string, string> = {
-                    ACTIVE: 'green',
-                    ERROR: 'red',
-                    DISABLED: 'default',
-                };
-                const labels: Record<string, string> = {
-                    ACTIVE: '正常',
-                    ERROR: '异常',
-                    DISABLED: '禁用',
-                };
-                return <Tag color={colors[status]}>{labels[status]}</Tag>;
-            },
+            render: (_: EmailStatus, record: EmailAccount) => renderEmailStatusTag(record),
         },
         {
             title: '最后检查',
             dataIndex: 'lastCheckAt',
             key: 'lastCheckAt',
             width: 160,
-            render: (val: string | null) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm') : '-'),
+            render: formatDateTime,
         },
         {
             title: 'Token 刷新',
             dataIndex: 'tokenRefreshedAt',
             key: 'tokenRefreshedAt',
             width: 160,
-            render: (val: string | null) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm') : '-'),
+            render: formatDateTime,
         },
         {
             title: '创建时间',
@@ -617,9 +669,10 @@ const EmailsPage: React.FC = () => {
         {
             title: '操作',
             key: 'action',
-            width: 240,
+            width: 220,
+            fixed: 'right',
             render: (_: unknown, record: EmailAccount) => (
-                <Space>
+                <Space size={0}>
                     <Tooltip title="刷新 Token">
                         <Button
                             type="text"
@@ -691,6 +744,7 @@ const EmailsPage: React.FC = () => {
                         <html>
                         <head>
                             <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1">
                             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:;">
                             <style>
                                 body { 
@@ -702,7 +756,9 @@ const EmailsPage: React.FC = () => {
                                     padding: 16px;
                                     background: #fafafa;
                                 }
-                                img { max-width: 100%; height: auto; }
+                                body { word-break: break-word; overflow-wrap: anywhere; }
+                                img, table { max-width: 100% !important; height: auto; }
+                                pre { white-space: pre-wrap; }
                                 a { color: #1890ff; }
                             </style>
                         </head>
@@ -728,6 +784,166 @@ const EmailsPage: React.FC = () => {
                 label: group.name,
             })),
         [groups]
+    );
+
+    const mailViewList: MailViewItem[] = useMemo(
+        () =>
+            mailList.map((item) => ({
+                ...item,
+                preview: buildMailPreview(item.text, item.html),
+                code: extractVerificationCode(item.subject, item.text, item.html),
+            })),
+        [mailList]
+    );
+
+    // ========================================
+    // Mobile list helpers
+    // ========================================
+    const pageIds = useMemo(() => data.map((item) => item.id), [data]);
+    const selectedOnPage = pageIds.filter((id) => selectedRowKeys.includes(id)).length;
+
+    const toggleRowSelection = (id: number, checked: boolean) => {
+        setSelectedRowKeys((prev) => (checked ? [...new Set([...prev, id])] : prev.filter((key) => key !== id)));
+    };
+
+    const togglePageSelection = (checked: boolean) => {
+        setSelectedRowKeys((prev) =>
+            checked
+                ? [...new Set([...prev, ...pageIds])]
+                : prev.filter((key) => !pageIds.includes(key as number))
+        );
+    };
+
+    const handleMobileMoreAction = (record: EmailAccount, key: string) => {
+        if (key === 'refresh') {
+            void handleRefreshToken(record);
+        } else if (key === 'edit') {
+            void handleEdit(record);
+        } else if (key === 'delete') {
+            Modal.confirm({
+                title: '确定要删除此邮箱吗？',
+                content: record.email,
+                okText: '删除',
+                cancelText: '取消',
+                okButtonProps: { danger: true },
+                onOk: () => handleDelete(record.id),
+            });
+        }
+    };
+
+    const mobileEmailList = (
+        <Spin spinning={loading}>
+            {data.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无邮箱" style={{ padding: '24px 0' }} />
+            ) : (
+                <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <Checkbox
+                            checked={selectedOnPage > 0 && selectedOnPage === pageIds.length}
+                            indeterminate={selectedOnPage > 0 && selectedOnPage < pageIds.length}
+                            onChange={(e) => togglePageSelection(e.target.checked)}
+                        >
+                            全选本页
+                        </Checkbox>
+                        <Text type="secondary">共 {total} 条</Text>
+                    </div>
+                    {data.map((record) => {
+                        const selected = selectedRowKeys.includes(record.id);
+                        const refreshing = refreshingTokenIds.has(record.id);
+                        return (
+                            <div key={record.id} className={`gx-mobile-card${selected ? ' is-selected' : ''}`}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                                    <Checkbox
+                                        checked={selected}
+                                        onChange={(e) => toggleRowSelection(record.id, e.target.checked)}
+                                        style={{ marginTop: 2 }}
+                                        aria-label={`选择 ${record.email}`}
+                                    />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <Text
+                                            strong
+                                            copyable={{ text: record.email, tooltips: ['复制邮箱', '已复制'] }}
+                                            ellipsis
+                                            style={{ maxWidth: '100%' }}
+                                        >
+                                            {record.email}
+                                        </Text>
+                                        <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                            {renderEmailStatusTag(record)}
+                                            {record.group ? (
+                                                <Tag color="blue" style={{ marginInlineEnd: 0 }}>{record.group.name}</Tag>
+                                            ) : (
+                                                <Tag style={{ marginInlineEnd: 0 }}>未分组</Tag>
+                                            )}
+                                        </div>
+                                        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+                                            检查 {formatDateTime(record.lastCheckAt)} · Token {formatDateTime(record.tokenRefreshedAt)}
+                                        </Text>
+                                        {record.status === 'ERROR' && record.errorMessage && (
+                                            <Text
+                                                type="danger"
+                                                style={{ fontSize: 12, display: 'block', maxWidth: '100%' }}
+                                                ellipsis={{ tooltip: record.errorMessage }}
+                                            >
+                                                {record.errorMessage}
+                                            </Text>
+                                        )}
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                                    <Button
+                                        size="small"
+                                        icon={<MailOutlined />}
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleViewMails(record, 'INBOX')}
+                                    >
+                                        收件箱
+                                    </Button>
+                                    <Button
+                                        size="small"
+                                        icon={<DeleteOutlined style={{ color: '#faad14' }} />}
+                                        style={{ flex: 1 }}
+                                        onClick={() => handleViewMails(record, 'Junk')}
+                                    >
+                                        垃圾箱
+                                    </Button>
+                                    <Dropdown
+                                        trigger={['click']}
+                                        placement="bottomRight"
+                                        menu={{
+                                            items: [
+                                                {
+                                                    key: 'refresh',
+                                                    icon: <SyncOutlined spin={refreshing} />,
+                                                    label: '刷新 Token',
+                                                    disabled: refreshing || record.status === 'DISABLED',
+                                                },
+                                                { key: 'edit', icon: <EditOutlined />, label: '编辑' },
+                                                { type: 'divider' },
+                                                { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+                                            ],
+                                            onClick: ({ key }) => handleMobileMoreAction(record, key),
+                                        }}
+                                    >
+                                        <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+                                    </Dropdown>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <Pagination
+                        align="center"
+                        size="small"
+                        current={page}
+                        pageSize={pageSize}
+                        total={total}
+                        showSizeChanger={false}
+                        onChange={(currentPage) => setPage(currentPage)}
+                        style={{ marginTop: 12 }}
+                    />
+                </>
+            )}
+        </Spin>
     );
 
     // ========================================
@@ -797,22 +1013,23 @@ const EmailsPage: React.FC = () => {
             <Tabs
                 defaultActiveKey="emails"
                 animated={false}
-                destroyInactiveTabPane
+                destroyOnHidden
                 items={[
                     {
                         key: 'emails',
                         label: '邮箱列表',
                         children: (
                             <>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-                                    <Space wrap>
+                                <div className="gx-toolbar">
+                                    <div className="gx-toolbar-filters">
                                         <Input
                                             placeholder="搜索邮箱"
                                             prefix={<SearchOutlined />}
                                             value={keyword}
                                             onChange={(e) => setKeyword(e.target.value)}
-                                            style={{ width: 200 }}
+                                            style={{ width: 220 }}
                                             allowClear
+                                            inputMode="email"
                                         />
                                         <Select
                                             placeholder="按分组筛选"
@@ -825,8 +1042,22 @@ const EmailsPage: React.FC = () => {
                                                 setPage(1);
                                             }}
                                         />
-                                    </Space>
-                                    <Space wrap>
+                                        <Select
+                                            placeholder="按状态筛选"
+                                            allowClear
+                                            style={{ width: 130 }}
+                                            value={filterStatus}
+                                            options={EMAIL_STATUS_OPTIONS}
+                                            onChange={(val: EmailStatus | undefined) => {
+                                                setFilterStatus(val);
+                                                setPage(1);
+                                            }}
+                                        />
+                                        <Tooltip title="刷新列表">
+                                            <Button icon={<ReloadOutlined />} onClick={() => void fetchData()} loading={loading} aria-label="刷新列表" />
+                                        </Tooltip>
+                                    </div>
+                                    <div className="gx-toolbar-actions">
                                         <Button
                                             icon={<SyncOutlined spin={batchRefreshing} />}
                                             onClick={handleBatchRefreshTokens}
@@ -861,19 +1092,21 @@ const EmailsPage: React.FC = () => {
                                         <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
                                             添加邮箱
                                         </Button>
-                                    </Space>
+                                    </div>
                                 </div>
 
-                                <Table
-                                    columns={columns}
-                                    dataSource={data}
-                                    rowKey="id"
-                                    loading={loading}
-                                    rowSelection={rowSelection}
-                                    pagination={tablePagination}
-                                    virtual
-                                    scroll={{ y: 560, x: 1200 }}
-                                />
+                                {isMobile ? mobileEmailList : (
+                                    <Table
+                                        columns={columns}
+                                        dataSource={data}
+                                        rowKey="id"
+                                        loading={loading}
+                                        rowSelection={rowSelection}
+                                        pagination={tablePagination}
+                                        virtual
+                                        scroll={{ y: 560, x: 1460 }}
+                                    />
+                                )}
                             </>
                         ),
                     },
@@ -892,6 +1125,7 @@ const EmailsPage: React.FC = () => {
                                     dataSource={groups}
                                     rowKey="id"
                                     pagination={false}
+                                    scroll={{ x: 'max-content' }}
                                 />
                             </>
                         ),
@@ -905,7 +1139,7 @@ const EmailsPage: React.FC = () => {
                 open={modalVisible}
                 onOk={handleSubmit}
                 onCancel={() => setModalVisible(false)}
-                destroyOnClose
+                destroyOnHidden
                 width={600}
             >
                 <Spin spinning={emailEditLoading}>
@@ -950,7 +1184,7 @@ const EmailsPage: React.FC = () => {
                 open={importModalVisible}
                 onOk={handleImport}
                 onCancel={() => setImportModalVisible(false)}
-                destroyOnClose
+                destroyOnHidden
                 width={700}
             >
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
@@ -1019,16 +1253,28 @@ const EmailsPage: React.FC = () => {
             {/* 邮件列表 Modal */}
             {mailModalVisible && (
                 <Modal
-                    title={`${currentEmail} 的${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}`}
+                    title={
+                        <Text ellipsis style={{ maxWidth: '90%' }}>
+                            {currentEmail}
+                        </Text>
+                    }
                     open={mailModalVisible}
                     onCancel={() => setMailModalVisible(false)}
                     footer={null}
-                    destroyOnClose
+                    destroyOnHidden
                     width={1000}
-                    styles={{ body: { padding: '16px 24px' } }}
                 >
-                    <Space style={{ marginBottom: 16 }}>
-                        <Button type="primary" onClick={handleRefreshMails} loading={mailLoading}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                        <Segmented
+                            value={currentMailbox}
+                            options={[
+                                { label: '收件箱', value: 'INBOX' },
+                                { label: '垃圾箱', value: 'Junk' },
+                            ]}
+                            onChange={(value) => void handleSwitchMailbox(String(value))}
+                            disabled={mailLoading}
+                        />
+                        <Button type="primary" icon={<SyncOutlined spin={mailLoading} />} onClick={handleRefreshMails} loading={mailLoading}>
                             收取新邮件
                         </Button>
                         <Popconfirm
@@ -1037,30 +1283,38 @@ const EmailsPage: React.FC = () => {
                         >
                             <Button danger>清空</Button>
                         </Popconfirm>
-                        <span style={{ marginLeft: 16, color: '#888' }}>
-                            共 {mailList.length} 封邮件
-                        </span>
-                    </Space>
+                        <Text type="secondary" style={{ marginInlineStart: 'auto' }}>
+                            共 {mailList.length} 封
+                        </Text>
+                    </div>
                     <List
                         loading={mailLoading}
-                        dataSource={mailList}
+                        dataSource={mailViewList}
                         itemLayout="horizontal"
-                        pagination={{
+                        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无邮件" /> }}
+                        pagination={mailViewList.length > 10 ? {
                             pageSize: 10,
-                            showSizeChanger: true,
-                            showQuickJumper: true,
-                            showTotal: (total: number) => `共 ${total} 条`,
-                            style: { marginTop: 16 },
-                        }}
-                        style={{ maxHeight: 450, overflow: 'auto' }}
-                        renderItem={(item: MailItem) => (
+                            size: 'small',
+                            align: 'center',
+                            showSizeChanger: !isMobile,
+                            showTotal: isMobile ? undefined : (count: number) => `共 ${count} 条`,
+                            style: { marginTop: 12 },
+                        } : false}
+                        style={isMobile ? undefined : { maxHeight: 480, overflow: 'auto' }}
+                        renderItem={(item: MailViewItem) => (
                             <List.Item
                                 key={item.id}
-                                actions={[
+                                onClick={() => handleViewEmailDetail(item)}
+                                style={{ cursor: 'pointer', alignItems: 'flex-start', paddingInline: 4 }}
+                                actions={isMobile ? undefined : [
                                     <Button
-                                        type="primary"
+                                        key="view"
+                                        type="link"
                                         size="small"
-                                        onClick={() => handleViewEmailDetail(item)}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleViewEmailDetail(item);
+                                        }}
                                     >
                                         查看
                                     </Button>,
@@ -1068,17 +1322,40 @@ const EmailsPage: React.FC = () => {
                             >
                                 <List.Item.Meta
                                     title={
-                                        <Typography.Text ellipsis style={{ maxWidth: 600 }}>
-                                            {item.subject || '(无主题)'}
-                                        </Typography.Text>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                            <Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
+                                                {item.subject || '(无主题)'}
+                                            </Text>
+                                            {item.code && (
+                                                <span onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0 }}>
+                                                    <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                                        <Text
+                                                            copyable={{ text: item.code, icon: <CopyOutlined />, tooltips: ['复制验证码', '已复制'] }}
+                                                            style={{ fontFamily: 'monospace', fontWeight: 600 }}
+                                                        >
+                                                            {item.code}
+                                                        </Text>
+                                                    </Tag>
+                                                </span>
+                                            )}
+                                        </div>
                                     }
                                     description={
-                                        <Space size="large">
-                                            <span style={{ color: '#1890ff' }}>{item.from || '未知发件人'}</span>
-                                            <span style={{ color: '#999' }}>
-                                                {item.date ? dayjs(item.date).format('YYYY-MM-DD HH:mm') : '-'}
-                                            </span>
-                                        </Space>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 12, fontSize: 12 }}>
+                                                <Text type="secondary" ellipsis style={{ maxWidth: '100%', color: '#1677ff' }}>
+                                                    {item.from || '未知发件人'}
+                                                </Text>
+                                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                                    {formatDateTime(item.date)}
+                                                </Text>
+                                            </div>
+                                            {item.preview && (
+                                                <Text type="secondary" ellipsis style={{ display: 'block', maxWidth: '100%', marginTop: 2 }}>
+                                                    {item.preview}
+                                                </Text>
+                                            )}
+                                        </div>
                                     }
                                 />
                             </List.Item>
@@ -1094,10 +1371,27 @@ const EmailsPage: React.FC = () => {
                     open={emailDetailVisible}
                     onCancel={() => setEmailDetailVisible(false)}
                     footer={null}
-                    destroyOnClose
+                    destroyOnHidden
                     width={900}
-                    styles={{ body: { padding: '16px 24px' } }}
                 >
+                    {emailDetailItem && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                            <Text type="secondary" ellipsis style={{ maxWidth: '100%' }}>
+                                {emailDetailItem.from || '未知发件人'} · {formatDateTime(emailDetailItem.date)}
+                            </Text>
+                            {emailDetailItem.code && (
+                                <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                    验证码：
+                                    <Text
+                                        copyable={{ text: emailDetailItem.code, tooltips: ['复制验证码', '已复制'] }}
+                                        style={{ fontFamily: 'monospace', fontWeight: 600 }}
+                                    >
+                                        {emailDetailItem.code}
+                                    </Text>
+                                </Tag>
+                            )}
+                        </div>
+                    )}
                     <iframe
                         title="email-content"
                         sandbox=""
@@ -1105,7 +1399,8 @@ const EmailsPage: React.FC = () => {
                         referrerPolicy="no-referrer"
                         style={{
                             width: '100%',
-                            height: 'calc(100vh - 300px)',
+                            height: isMobile ? 'calc(100vh - 240px)' : 'calc(100vh - 320px)',
+                            minHeight: 320,
                             border: '1px solid #eee',
                             borderRadius: '8px',
                             backgroundColor: '#fafafa',
@@ -1120,7 +1415,7 @@ const EmailsPage: React.FC = () => {
                 open={groupModalVisible}
                 onOk={handleGroupSubmit}
                 onCancel={() => setGroupModalVisible(false)}
-                destroyOnClose
+                destroyOnHidden
                 width={460}
             >
                 <Form form={groupForm} layout="vertical">
@@ -1146,7 +1441,7 @@ const EmailsPage: React.FC = () => {
                 open={assignGroupModalVisible}
                 onOk={handleBatchAssignGroup}
                 onCancel={() => setAssignGroupModalVisible(false)}
-                destroyOnClose
+                destroyOnHidden
                 width={400}
             >
                 <p>已选择 {selectedRowKeys.length} 个邮箱</p>

@@ -126,8 +126,8 @@ const OperationLogsPage: React.FC = () => {
                 }
             />
 
-            <Card bordered={false}>
-                <Space style={{ marginBottom: 16 }}>
+            <Card variant="borderless">
+                <Space wrap style={{ marginBottom: 16 }}>
                     <Select
                         placeholder="筛选操作类型"
                         style={{ width: 160 }}
@@ -141,6 +141,7 @@ const OperationLogsPage: React.FC = () => {
                 </Space>
 
                 <Table
+                    scroll={{ x: 'max-content' }}
                     dataSource={logs}
                     columns={columns}
                     rowKey="id"

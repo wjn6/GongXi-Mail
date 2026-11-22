@@ -15,7 +15,7 @@ export const emailService = {
         const where: Prisma.EmailAccountWhereInput = {};
         if (status) where.status = status;
         if (keyword) {
-            where.email = { contains: keyword };
+            where.email = { contains: keyword, mode: 'insensitive' as const };
         }
         if (groupId) {
             where.groupId = groupId;

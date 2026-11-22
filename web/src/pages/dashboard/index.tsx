@@ -331,7 +331,7 @@ const DashboardPage: React.FC = () => {
             {/* 图表区域 */}
             <Row gutter={[16, 16]} style={{ marginTop: 16 }} ref={chartsSectionRef}>
                 <Col xs={24} md={16}>
-                    <Card title="API 调用趋势（近7天）" bordered={false}>
+                    <Card title="API 调用趋势（近7天）" variant="borderless">
                         {!chartsReady || !chartsInView || trendLoading ? (
                             <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
                         ) : (
@@ -342,7 +342,7 @@ const DashboardPage: React.FC = () => {
                     </Card>
                 </Col>
                 <Col xs={24} md={8}>
-                    <Card title="邮箱状态分布" bordered={false}>
+                    <Card title="邮箱状态分布" variant="borderless">
                         {coreLoading || !chartsReady || !chartsInView ? (
                             <div style={{ textAlign: 'center', padding: 40, minHeight: 280 }}><Spin /></div>
                         ) : pieData.length > 0 ? (
@@ -363,11 +363,12 @@ const DashboardPage: React.FC = () => {
                 <Col xs={24} md={12}>
                     <Card
                         title="最近添加的邮箱"
-                        bordered={false}
-                        bodyStyle={{ padding: 0 }}
+                        variant="borderless"
+                        styles={{ body: { padding: 0 } }}
                         extra={<Link to="/emails">查看全部</Link>}
                     >
                         <Table
+                            scroll={{ x: 'max-content' }}
                             dataSource={recentEmails}
                             columns={emailColumns}
                             rowKey="id"
@@ -381,11 +382,12 @@ const DashboardPage: React.FC = () => {
                 <Col xs={24} md={12}>
                     <Card
                         title="API Key 使用排行"
-                        bordered={false}
-                        bodyStyle={{ padding: 0 }}
+                        variant="borderless"
+                        styles={{ body: { padding: 0 } }}
                         extra={<Link to="/api-keys">查看全部</Link>}
                     >
                         <Table
+                            scroll={{ x: 'max-content' }}
                             dataSource={recentApiKeys}
                             columns={apiKeyColumns}
                             rowKey="id"

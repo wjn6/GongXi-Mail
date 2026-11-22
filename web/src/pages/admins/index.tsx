@@ -204,9 +204,10 @@ const AdminsPage: React.FC = () => {
         {
             title: '操作',
             key: 'action',
-            width: 120,
+            width: 100,
+            fixed: 'right',
             render: (_, record) => (
-                <Space>
+                <Space size={0}>
                     <Tooltip title="编辑">
                         <Button
                             type="text"
@@ -231,7 +232,7 @@ const AdminsPage: React.FC = () => {
 
     return (
         <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div className="gx-page-head">
                 <Title level={4} style={{ margin: 0 }}>
                     管理员管理
                 </Title>
@@ -241,6 +242,7 @@ const AdminsPage: React.FC = () => {
             </div>
 
             <Table
+                scroll={{ x: 'max-content' }}
                 columns={columns}
                 dataSource={data}
                 rowKey="id"

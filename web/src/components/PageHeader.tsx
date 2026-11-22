@@ -17,7 +17,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({
     extra,
 }) => {
     return (
-        <div style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 20 }}>
             {breadcrumb && breadcrumb.length > 0 && (
                 <Breadcrumb
                     items={breadcrumb.map((item) => ({
@@ -26,12 +26,12 @@ const PageHeader: React.FC<PageHeaderProps> = ({
                     style={{ marginBottom: 8 }}
                 />
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
+            <div className="gx-page-head" style={{ marginBottom: 0 }}>
+                <div style={{ minWidth: 0 }}>
                     <Title level={4} style={{ marginBottom: 0 }}>{title}</Title>
                     {subtitle && <Text type="secondary">{subtitle}</Text>}
                 </div>
-                {extra && <Space>{extra}</Space>}
+                {extra && <Space wrap>{extra}</Space>}
             </div>
         </div>
     );

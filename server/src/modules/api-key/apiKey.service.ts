@@ -47,8 +47,8 @@ export const apiKeyService = {
         if (status) where.status = status;
         if (keyword) {
             where.OR = [
-                { name: { contains: keyword } },
-                { keyPrefix: { contains: keyword } },
+                { name: { contains: keyword, mode: 'insensitive' as const } },
+                { keyPrefix: { contains: keyword, mode: 'insensitive' as const } },
             ];
         }
 
