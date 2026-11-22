@@ -80,12 +80,15 @@ interface PoolStats {
     total: number;
     used: number;
     remaining: number;
+    claimed?: number;
+    completed?: number;
 }
 
 interface PoolEmailItem {
     id: number;
     email: string;
     used: boolean;
+    claimed?: boolean;
     groupId: number | null;
     groupName: string | null;
 }
@@ -944,6 +947,14 @@ const ApiKeysPage: React.FC = () => {
                                 .stat-red .ant-statistic-content-value { color: #ff4d4f; }
                             `}</style>
 
+                            {(poolStats.claimed ?? 0) > 0 && (
+                                <div style={{ marginTop: -12, marginBottom: 16 }}>
+                                    <Text type="secondary">
+                                        其中已用完 {poolStats.completed ?? poolStats.used - (poolStats.claimed ?? 0)}，领取中 {poolStats.claimed}（租约到期未完成会自动回收）
+                                    </Text>
+                                </div>
+                            )}
+
                             <div style={{ marginBottom: 24 }}>
                                 <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
                                     使用进度
@@ -1072,12 +1083,17 @@ const ApiKeysPage: React.FC = () => {
                                     style={{ width: '100%' }}
                                 >
                                     <Row>
-                                        {filteredEmailList.map((email: { id: number; email: string; used: boolean; groupId: number | null; groupName: string | null }) => (
+                                        {filteredEmailList.map((email: { id: number; email: string; used: boolean; claimed?: boolean; groupId: number | null; groupName: string | null }) => (
                                             <Col xs={24} sm={12} key={email.id} style={{ marginBottom: 8, minWidth: 0 }}>
                                                 <Checkbox value={email.id} style={{ wordBreak: 'break-all' }}>
                                                     {email.email}
                                                     {email.groupName && (
                                                         <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>{email.groupName}</Tag>
+                                                    )}
+                                                    {email.claimed && (
+                                                        <Tooltip title="已被领取，租约未到期；勾选保存后改为已用完，取消勾选则释放">
+                                                            <Tag color="orange" style={{ marginLeft: 4, fontSize: 11 }}>领取中</Tag>
+                                                        </Tooltip>
                                                     )}
                                                 </Checkbox>
                                             </Col>

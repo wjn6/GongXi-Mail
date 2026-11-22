@@ -344,7 +344,9 @@ export const mailService = {
             imap.once('ready', async () => {
                 try {
                     await new Promise<void>((res, rej) => {
-                        imap.openBox(mailbox, true, (err) => {
+                        // IMAP 中除 INBOX 外文件夹名区分大小写，Outlook 垃圾箱为 "Junk"
+                        const boxName = mailbox?.toLowerCase() === 'junk' ? 'Junk' : mailbox?.toLowerCase() === 'inbox' ? 'INBOX' : mailbox;
+                        imap.openBox(boxName, true, (err) => {
                             if (err) return rej(err);
                             res();
                         });

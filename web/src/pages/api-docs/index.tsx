@@ -21,6 +21,10 @@ const ApiDocsPage: React.FC = () => {
     list_emails: '获取邮箱列表',
     pool_stats: '邮箱池统计',
     pool_reset: '重置邮箱池',
+    wait_code: '长轮询等待验证码',
+    claim_email: '领取邮箱（带租约）',
+    complete_email: '完成领取，邮箱不再分配',
+    release_email: '释放领取，邮箱回到池中',
   };
 
   const logActionRows = LOG_ACTION_OPTIONS.map((item) => ({
@@ -70,6 +74,94 @@ const ApiDocsPage: React.FC = () => {
   "error": {
     "code": "NO_UNUSED_EMAIL",
     "message": "No unused emails available."
+  }
+}`,
+    },
+    {
+      name: '领取邮箱（带租约）',
+      method: 'GET/POST',
+      path: '/api/claim-email',
+      description: '从邮箱池领取一个邮箱并持有租约。业务成功后调用 complete-email 标记已用完；失败调用 release-email 归还；租约到期未处理会自动回收，可被再次领取。',
+      params: [
+        { name: 'group', type: 'string', required: false, desc: '分组名称，仅从该分组中领取' },
+        { name: 'lease', type: 'number', required: false, desc: '租约秒数，默认 600，范围 30 ~ 86400' },
+      ],
+      example: `curl -X POST "${baseUrl}/api/claim-email" \\
+  -H "X-API-Key: sk_your_api_key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"group": "aws", "lease": 900}'`,
+      successResponse: `{
+  "success": true,
+  "data": {
+    "email": "example@outlook.com",
+    "id": 1,
+    "status": "CLAIMED",
+    "claimedAt": "2026-11-23T02:00:00.000Z",
+    "leaseExpiresAt": "2026-11-23T02:15:00.000Z",
+    "leaseSeconds": 900
+  }
+}`,
+      errorResponse: `{
+  "success": false,
+  "error": {
+    "code": "NO_UNUSED_EMAIL",
+    "message": "No unused emails available. Used: 100/100"
+  }
+}`,
+    },
+    {
+      name: '完成领取',
+      method: 'GET/POST',
+      path: '/api/complete-email',
+      description: '将已领取的邮箱标记为已用完，之后不会再分配给当前 API Key。重复调用是幂等的。',
+      params: [
+        { name: 'email', type: 'string', required: true, desc: '已领取的邮箱地址' },
+      ],
+      example: `curl -X POST "${baseUrl}/api/complete-email" \\
+  -H "X-API-Key: sk_your_api_key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"email": "example@outlook.com"}'`,
+      successResponse: `{
+  "success": true,
+  "data": {
+    "email": "example@outlook.com",
+    "status": "COMPLETED",
+    "completedAt": "2026-11-23T02:03:00.000Z",
+    "alreadyCompleted": false
+  }
+}`,
+      errorResponse: `{
+  "success": false,
+  "error": {
+    "code": "CLAIM_NOT_FOUND",
+    "message": "This email is not claimed by this API Key"
+  }
+}`,
+    },
+    {
+      name: '释放领取',
+      method: 'GET/POST',
+      path: '/api/release-email',
+      description: '归还已领取的邮箱，使其回到池中可被再次领取。已完成的邮箱不能释放（如需复用请调用 reset-pool）。',
+      params: [
+        { name: 'email', type: 'string', required: true, desc: '已领取的邮箱地址' },
+      ],
+      example: `curl -X POST "${baseUrl}/api/release-email" \\
+  -H "X-API-Key: sk_your_api_key" \\
+  -H "Content-Type: application/json" \\
+  -d '{"email": "example@outlook.com"}'`,
+      successResponse: `{
+  "success": true,
+  "data": {
+    "email": "example@outlook.com",
+    "released": true
+  }
+}`,
+      errorResponse: `{
+  "success": false,
+  "error": {
+    "code": "ALREADY_COMPLETED",
+    "message": "Email already completed and cannot be released"
   }
 }`,
     },
@@ -128,6 +220,50 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
   -H "X-API-Key: sk_your_api_key"`,
       successResponse: `123456`,
       errorResponse: `Error: No match found`,
+    },
+    {
+      name: '等待验证码（长轮询）',
+      method: 'GET/POST',
+      path: '/api/wait_code',
+      description: '服务端持续收信，直到 since 之后到达的邮件中出现验证码才返回，超时返回 404 CODE_TIMEOUT。默认自动识别 4-8 位数字验证码，也可用 match 正则提取任意格式。客户端 HTTP 超时请设置得比 timeout 更长。',
+      params: [
+        { name: 'email', type: 'string', required: true, desc: '邮箱地址' },
+        { name: 'match', type: 'string', required: false, desc: '正则表达式，有捕获组时返回第一个捕获组；不填则自动识别' },
+        { name: 'timeout', type: 'number', required: false, desc: '最长等待秒数，默认 60，范围 5 ~ 180' },
+        { name: 'interval', type: 'number', required: false, desc: '收信间隔秒数，默认 5，范围 3 ~ 30' },
+        { name: 'since', type: 'string', required: false, desc: '只看此时间之后的邮件（ISO 时间或 Unix 时间戳）。默认：当前 Key 的领取/分配时间（不早于 10 分钟前），否则为请求前 60 秒' },
+        { name: 'mailbox', type: 'string', required: false, desc: 'inbox / junk / all，默认 all（收件箱 + 垃圾箱）' },
+        { name: 'format', type: 'string', required: false, desc: 'json（默认）或 text（只返回验证码纯文本）' },
+        { name: 'socks5', type: 'string', required: false, desc: 'SOCKS5 代理地址' },
+        { name: 'http', type: 'string', required: false, desc: 'HTTP 代理地址' },
+      ],
+      example: `# 触发目标站点发送验证码后调用，最长等 90 秒
+curl --max-time 100 "${baseUrl}/api/wait_code?email=example@outlook.com&timeout=90&format=text" \\
+  -H "X-API-Key: sk_your_api_key"`,
+      successResponse: `{
+  "success": true,
+  "data": {
+    "email": "example@outlook.com",
+    "since": "2026-11-23T02:00:00.000Z",
+    "code": "482913",
+    "matchedBy": "auto",
+    "mailbox": "inbox",
+    "messageId": "AAMk...",
+    "subject": "Your security code",
+    "from": "noreply@example.com",
+    "receivedAt": "2026-11-23T02:00:12.000Z",
+    "method": "graph_api",
+    "attempts": 3,
+    "waitedMs": 10342
+  }
+}`,
+      errorResponse: `{
+  "success": false,
+  "error": {
+    "code": "CODE_TIMEOUT",
+    "message": "No verification code received within 90s"
+  }
+}`,
     },
     {
       name: '获取所有邮件',
@@ -301,6 +437,8 @@ curl "${baseUrl}/api/mail_text?email=example@outlook.com&match=\\d{6}" \\
                   <li><strong>直接访问</strong>：如果您已知目标邮箱地址，可直接调用 <code>/api/mail_new</code> 或 <code>/api/mail_all</code> 获取邮件，无需任何前置分配操作。</li>
                   <li><strong>顺序分配</strong>：如果你需要一个新的、未使用的邮箱，请调用 <code>/api/get-email</code>。这将按编号顺序分配一个未使用邮箱并标记为您已使用，避免重复。</li>
               <li><strong>文本提速</strong>：对于自动化脚本，推荐使用 <code>/api/mail_text</code> 配合正则匹配，直接获取验证码等核心信息。</li>
+              <li><strong>领取流程（推荐）</strong>：<code>/api/claim-email</code> 领取 → 业务成功调用 <code>/api/complete-email</code>，失败调用 <code>/api/release-email</code> 归还；租约到期未处理会自动回收。</li>
+              <li><strong>等待验证码</strong>：触发发送后调用 <code>/api/wait_code</code>，服务端持续收信直到拿到新验证码或超时，无需自己轮询。</li>
             </ul>
           </div>
         }

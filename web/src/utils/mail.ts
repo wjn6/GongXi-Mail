@@ -74,7 +74,7 @@ export function extractVerificationCode(subject: string, text: string, html: str
             else if (code.length === 4 || code.length === 8) score += 0.5;
             if (sourceIndex === 0) score += 1; // 主题中的数字更可信
             if (code.length === 4 && /^(19|20)\d{2}$/.test(code)) score -= 3; // 年份
-            if (/^(\d)\1+$/.test(code)) score -= 2; // 000000 之类
+            if (/^(\d)\1+$/.test(code)) score -= 5; // 000000 之类
 
             if (!best || score > best.score) {
                 best = { code, score };

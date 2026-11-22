@@ -137,6 +137,10 @@ npm run test
 | `/api/list-emails` | 获取系统所有可用邮箱 | - |
 | `/api/pool-stats` | 邮箱池统计 | - |
 | `/api/reset-pool` | 重置分配记录 | 释放当前 Key 占用的所有邮箱标记 |
+| `/api/claim-email` | 领取邮箱（带租约） | 租约到期未完成/释放会自动回收 |
+| `/api/complete-email` | 完成领取 | 邮箱标记为已用完，不再分配；幂等 |
+| `/api/release-email` | 释放领取 | 邮箱回到池中；已完成的不能释放 |
+| `/api/wait_code` | 长轮询等待验证码 | 服务端持续收信直到拿到新验证码或超时 |
 
 #### 使用流程
 
@@ -159,6 +163,24 @@ npm run test
      -d '{"email": "xxx@outlook.com"}'
    ```
 
+4. **领取流程（推荐，失败可归还）**：
+   ```bash
+   # 领取，租约 15 分钟（默认 600 秒，范围 30~86400）
+   curl -X POST "/api/claim-email" -H "X-API-Key: sk_xxx" -d '{"group": "aws", "lease": 900}'
+   # 业务成功：标记已用完，之后不再分配给该 Key
+   curl -X POST "/api/complete-email" -H "X-API-Key: sk_xxx" -d '{"email": "xxx@outlook.com"}'
+   # 业务失败：归还到池中，可被再次领取
+   curl -X POST "/api/release-email" -H "X-API-Key: sk_xxx" -d '{"email": "xxx@outlook.com"}'
+   ```
+   `/api/get-email` 保持原语义（分配即永久标记已用），已有调用方无需修改。
+
+5. **等待验证码（长轮询）**：触发目标站点发送验证码后调用，服务端每隔 `interval` 秒收信，
+   直到 `since` 之后到达的邮件中出现验证码才返回，超时返回 404 `CODE_TIMEOUT`：
+   ```bash
+   curl --max-time 100 "/api/wait_code?email=xxx@outlook.com&timeout=90&format=text" -H "X-API-Key: sk_xxx"
+   # 返回: 482913
+   ```
+
 #### 参数说明
 
 **通用参数**：
@@ -174,6 +196,22 @@ npm run test
 |------|------|
 | match | 正则表达式，用于提取特定内容 (例如 `\d{6}`) |
 
+**`/api/wait_code` 参数**：
+| 参数 | 说明 |
+|------|------|
+| email | 邮箱地址（必填） |
+| match | 正则表达式，有捕获组时返回第一个捕获组；不填则自动识别 4-8 位数字验证码 |
+| timeout | 最长等待秒数，默认 60，范围 5~180（客户端 HTTP 超时需更长） |
+| interval | 收信间隔秒数，默认 5，范围 3~30 |
+| since | 只看此时间之后的邮件（ISO 或 Unix 时间戳）；默认取当前 Key 的领取/分配时间（不早于 10 分钟前），否则为请求前 60 秒 |
+| mailbox | `inbox` / `junk` / `all`，默认 `all` |
+| format | `json`（默认）或 `text`（只返回验证码） |
+
+单个 API Key 同时最多 10 个 `wait_code` 请求，一次等待只计入一次按 Key 限流。
+
+**`/api/claim-email` 参数**：`group`（分组名，可选）、`lease`（租约秒数，默认 600）。
+**`/api/complete-email`、`/api/release-email` 参数**：`email`（必填）。
+
 ## 操作日志 Action 命名
 
 `/admin/dashboard/logs` 中 `action` 字段使用以下固定值：
@@ -188,11 +226,16 @@ npm run test
 | `list_emails` | 获取邮箱列表 |
 | `pool_stats` | 邮箱池统计 |
 | `pool_reset` | 重置邮箱池 |
+| `wait_code` | 等待验证码 |
+| `claim_email` | 领取邮箱 |
+| `complete_email` | 完成领取 |
+| `release_email` | 释放领取 |
 
 ## API Key 权限键
 
 API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`、`process_mailbox`）。  
-未配置 `permissions` 时默认允许全部接口。
+未配置 `permissions` 时默认允许全部接口。已配置权限的旧 Key 需要在后台勾选新增的
+`wait_code` / `claim_email` / `complete_email` / `release_email` 后才能调用对应接口。
 
 ## 生产配置要求
 

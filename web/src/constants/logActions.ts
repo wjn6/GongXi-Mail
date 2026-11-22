@@ -7,6 +7,10 @@ export const LOG_ACTIONS = {
     LIST_EMAILS: 'list_emails',
     POOL_STATS: 'pool_stats',
     POOL_RESET: 'pool_reset',
+    WAIT_CODE: 'wait_code',
+    CLAIM_EMAIL: 'claim_email',
+    COMPLETE_EMAIL: 'complete_email',
+    RELEASE_EMAIL: 'release_email',
 } as const;
 
 export type LogAction = typeof LOG_ACTIONS[keyof typeof LOG_ACTIONS];
@@ -25,6 +29,10 @@ export const LOG_ACTION_LABELS: Record<LogAction, string> = {
     [LOG_ACTIONS.LIST_EMAILS]: '获取邮箱列表',
     [LOG_ACTIONS.POOL_STATS]: '邮箱池统计',
     [LOG_ACTIONS.POOL_RESET]: '重置邮箱池',
+    [LOG_ACTIONS.WAIT_CODE]: '等待验证码',
+    [LOG_ACTIONS.CLAIM_EMAIL]: '领取邮箱',
+    [LOG_ACTIONS.COMPLETE_EMAIL]: '完成领取',
+    [LOG_ACTIONS.RELEASE_EMAIL]: '释放领取',
 };
 
 export const LOG_ACTION_COLORS: Record<LogAction, string> = {
@@ -36,6 +44,10 @@ export const LOG_ACTION_COLORS: Record<LogAction, string> = {
     [LOG_ACTIONS.LIST_EMAILS]: 'default',
     [LOG_ACTIONS.POOL_STATS]: 'default',
     [LOG_ACTIONS.POOL_RESET]: 'warning',
+    [LOG_ACTIONS.WAIT_CODE]: 'purple',
+    [LOG_ACTIONS.CLAIM_EMAIL]: 'cyan',
+    [LOG_ACTIONS.COMPLETE_EMAIL]: 'success',
+    [LOG_ACTIONS.RELEASE_EMAIL]: 'orange',
 };
 
 export const LOG_ACTION_OPTIONS: Array<{ value: LogAction; label: string }> = [
@@ -47,6 +59,10 @@ export const LOG_ACTION_OPTIONS: Array<{ value: LogAction; label: string }> = [
     { value: LOG_ACTIONS.LIST_EMAILS, label: LOG_ACTION_LABELS[LOG_ACTIONS.LIST_EMAILS] },
     { value: LOG_ACTIONS.POOL_STATS, label: LOG_ACTION_LABELS[LOG_ACTIONS.POOL_STATS] },
     { value: LOG_ACTIONS.POOL_RESET, label: LOG_ACTION_LABELS[LOG_ACTIONS.POOL_RESET] },
+    { value: LOG_ACTIONS.WAIT_CODE, label: LOG_ACTION_LABELS[LOG_ACTIONS.WAIT_CODE] },
+    { value: LOG_ACTIONS.CLAIM_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.CLAIM_EMAIL] },
+    { value: LOG_ACTIONS.COMPLETE_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.COMPLETE_EMAIL] },
+    { value: LOG_ACTIONS.RELEASE_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.RELEASE_EMAIL] },
 ];
 
 export function normalizeLogAction(action: string): LogAction | undefined {

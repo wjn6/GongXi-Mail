@@ -8,6 +8,75 @@ interface ApiKeyScope {
     allowedEmailIds?: number[];
 }
 
+/** 领取租约（秒）默认值与上下限 */
+export const CLAIM_LEASE_DEFAULT_SECONDS = 600;
+export const CLAIM_LEASE_MIN_SECONDS = 30;
+export const CLAIM_LEASE_MAX_SECONDS = 24 * 60 * 60;
+
+/**
+ * "仍占用"的使用记录：已完成，或领取中且租约未过期。
+ * 过期的领取记录视为已释放，可被重新分配。
+ */
+function activeUsageWhere(now: Date = new Date()): Prisma.EmailUsageWhereInput {
+    return {
+        OR: [
+            { status: 'COMPLETED' },
+            { status: 'CLAIMED', leaseExpiresAt: { gt: now } },
+        ],
+    };
+}
+
+function expiredClaimWhere(now: Date = new Date()): Prisma.EmailUsageWhereInput {
+    return {
+        status: 'CLAIMED',
+        OR: [
+            { leaseExpiresAt: null },
+            { leaseExpiresAt: { lte: now } },
+        ],
+    };
+}
+
+type AllocationMode =
+    | { status: 'COMPLETED' }
+    | { status: 'CLAIMED'; leaseSeconds: number };
+
+/**
+ * 为 API Key 占用一个邮箱。先清理同一组合上已过期的领取记录，再写入新记录；
+ * 并发冲突时抛出 ALREADY_USED，调用方重试即可。
+ */
+async function allocate(apiKeyId: number, emailAccountId: number, mode: AllocationMode) {
+    const now = new Date();
+    try {
+        return await prisma.$transaction(async (tx) => {
+            await tx.emailUsage.deleteMany({
+                where: { apiKeyId, emailAccountId, ...expiredClaimWhere(now) },
+            });
+            return tx.emailUsage.create({
+                data: mode.status === 'CLAIMED'
+                    ? {
+                        apiKeyId,
+                        emailAccountId,
+                        status: 'CLAIMED',
+                        usedAt: now,
+                        leaseExpiresAt: new Date(now.getTime() + mode.leaseSeconds * 1000),
+                    }
+                    : {
+                        apiKeyId,
+                        emailAccountId,
+                        status: 'COMPLETED',
+                        usedAt: now,
+                        completedAt: now,
+                    },
+            });
+        });
+    } catch (error: unknown) {
+        if (hasErrorCode(error, 'P2002')) {
+            throw new AppError('ALREADY_USED', 'Email already allocated to this API Key', 409);
+        }
+        throw error;
+    }
+}
+
 function hasErrorCode(error: unknown, code: string): boolean {
     if (!error || typeof error !== 'object') {
         return false;
@@ -118,7 +187,7 @@ export const poolService = {
             status: 'ACTIVE',
             NOT: {
                 usages: {
-                    some: { apiKeyId },
+                    some: { apiKeyId, ...activeUsageWhere() },
                 },
             },
         }, scope, groupId);
@@ -155,16 +224,96 @@ export const poolService = {
      * 标记邮箱已被使用
      */
     async markUsed(apiKeyId: number, emailAccountId: number) {
-        try {
-            await prisma.emailUsage.create({
-                data: { apiKeyId, emailAccountId, usedAt: new Date() },
-            });
-        } catch (error: unknown) {
-            if (hasErrorCode(error, 'P2002')) {
-                throw new AppError('ALREADY_USED', 'Email already allocated to this API Key', 409);
+        await allocate(apiKeyId, emailAccountId, { status: 'COMPLETED' });
+    },
+
+    /**
+     * 领取一个邮箱（带租约）。租约到期未完成/释放时自动回收。
+     * 并发冲突自动重试 3 次。
+     */
+    async claimEmail(apiKeyId: number, groupName: string | undefined, leaseSeconds: number) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const email = await this.getUnusedEmail(apiKeyId, groupName);
+            if (!email) {
+                const stats = await this.getStats(apiKeyId, groupName);
+                throw new AppError(
+                    'NO_UNUSED_EMAIL',
+                    `No unused emails available${groupName ? ` in group '${groupName}'` : ''}. Used: ${stats.used}/${stats.total}`,
+                    400
+                );
             }
-            throw error;
+            try {
+                const usage = await allocate(apiKeyId, email.id, { status: 'CLAIMED', leaseSeconds });
+                return {
+                    id: email.id,
+                    email: email.email,
+                    claimedAt: usage.usedAt,
+                    leaseExpiresAt: usage.leaseExpiresAt,
+                };
+            } catch (err: unknown) {
+                if (hasErrorCode(err, 'ALREADY_USED')) {
+                    continue;
+                }
+                throw err;
+            }
         }
+        throw new AppError('CONCURRENCY_LIMIT', 'System busy, please try again', 429);
+    },
+
+    /**
+     * 完成领取：邮箱标记为已用完，不再分配给该 API Key。重复调用幂等。
+     */
+    async completeClaim(apiKeyId: number, emailAccountId: number) {
+        const usage = await prisma.emailUsage.findUnique({
+            where: { apiKeyId_emailAccountId: { apiKeyId, emailAccountId } },
+        });
+        if (!usage) {
+            throw new AppError('CLAIM_NOT_FOUND', 'This email is not claimed by this API Key', 404);
+        }
+        if (usage.status === 'COMPLETED') {
+            return { status: 'COMPLETED' as const, completedAt: usage.completedAt ?? usage.usedAt, alreadyCompleted: true };
+        }
+        const updated = await prisma.emailUsage.update({
+            where: { id: usage.id },
+            data: { status: 'COMPLETED', completedAt: new Date(), leaseExpiresAt: null },
+        });
+        return { status: 'COMPLETED' as const, completedAt: updated.completedAt, alreadyCompleted: false };
+    },
+
+    /**
+     * 释放领取：邮箱回到池中，可再次被领取。已完成的邮箱不能释放（请用 reset-pool）。
+     */
+    async releaseClaim(apiKeyId: number, emailAccountId: number) {
+        const usage = await prisma.emailUsage.findUnique({
+            where: { apiKeyId_emailAccountId: { apiKeyId, emailAccountId } },
+            select: { id: true, status: true },
+        });
+        if (!usage) {
+            throw new AppError('CLAIM_NOT_FOUND', 'This email is not claimed by this API Key', 404);
+        }
+        if (usage.status === 'COMPLETED') {
+            throw new AppError('ALREADY_COMPLETED', 'Email already completed and cannot be released', 409);
+        }
+        await prisma.emailUsage.deleteMany({ where: { id: usage.id, status: 'CLAIMED' } });
+        return { released: true };
+    },
+
+    /**
+     * 该 API Key 对某邮箱的当前占用记录（不含已过期的领取）
+     */
+    async getActiveUsage(apiKeyId: number, emailAccountId: number) {
+        return prisma.emailUsage.findFirst({
+            where: { apiKeyId, emailAccountId, ...activeUsageWhere() },
+            select: { status: true, usedAt: true, leaseExpiresAt: true },
+        });
+    },
+
+    /**
+     * 清理所有已过期的领取记录（定时任务调用）
+     */
+    async cleanupExpiredClaims(): Promise<number> {
+        const result = await prisma.emailUsage.deleteMany({ where: expiredClaimWhere() });
+        return result.count;
     },
 
     /**
@@ -182,19 +331,20 @@ export const poolService = {
             select: { id: true },
         })).map((e: { id: number }) => e.id);
 
-        const usageWhere: Prisma.EmailUsageWhereInput = { apiKeyId };
-        if (emailIds.length > 0) {
-            usageWhere.emailAccountId = { in: emailIds };
-        } else {
-            usageWhere.emailAccountId = { in: [-1] };
-        }
+        const now = new Date();
+        const usageWhere: Prisma.EmailUsageWhereInput = {
+            apiKeyId,
+            emailAccountId: { in: emailIds.length > 0 ? emailIds : [-1] },
+        };
 
-        const [total, used] = await Promise.all([
-            Promise.resolve(emailIds.length),
-            prisma.emailUsage.count({ where: usageWhere }),
+        const [completed, claimed] = await Promise.all([
+            prisma.emailUsage.count({ where: { ...usageWhere, status: 'COMPLETED' } }),
+            prisma.emailUsage.count({ where: { ...usageWhere, status: 'CLAIMED', leaseExpiresAt: { gt: now } } }),
         ]);
 
-        return { total, used, remaining: Math.max(0, total - used) };
+        const total = emailIds.length;
+        const used = completed + claimed;
+        return { total, used, remaining: Math.max(0, total - used), claimed, completed };
     },
 
     /**
@@ -237,17 +387,23 @@ export const poolService = {
                 orderBy: { id: 'asc' },
             }),
             prisma.emailUsage.findMany({
-                where: { apiKeyId },
-                select: { emailAccountId: true },
+                where: { apiKeyId, ...activeUsageWhere() },
+                select: { emailAccountId: true, status: true },
             }),
         ]);
 
         const usedSet = new Set(usedIds.map((u: { emailAccountId: number }) => u.emailAccountId));
+        const claimedSet = new Set(
+            usedIds
+                .filter((u: { status: string }) => u.status === 'CLAIMED')
+                .map((u: { emailAccountId: number }) => u.emailAccountId)
+        );
 
         return emails.map((e: { id: number; email: string; groupId: number | null; group: { id: number; name: string } | null }) => ({
             id: e.id,
             email: e.email,
             used: usedSet.has(e.id),
+            claimed: claimedSet.has(e.id),
             groupId: e.groupId,
             groupName: e.group?.name || null,
         }));
@@ -292,6 +448,16 @@ export const poolService = {
 
             const nextEmailIds = uniqueRequestedIds;
 
+            const now = new Date();
+            // 先清理范围内已过期的领取，避免其阻塞重新标记
+            await tx.emailUsage.deleteMany({
+                where: {
+                    apiKeyId,
+                    emailAccountId: { in: scopedEmailIds },
+                    ...expiredClaimWhere(now),
+                },
+            });
+
             const existingUsages = await tx.emailUsage.findMany({
                 where: {
                     apiKeyId,
@@ -322,6 +488,8 @@ export const poolService = {
                     data: toAdd.map((emailAccountId: number) => ({
                         apiKeyId,
                         emailAccountId,
+                        status: 'COMPLETED' as const,
+                        completedAt: now,
                     })),
                     skipDuplicates: true,
                 });

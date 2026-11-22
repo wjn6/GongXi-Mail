@@ -122,15 +122,20 @@ model SystemConfig {
 // 邮箱使用记录（邮箱池）
 // ============================================
 model EmailUsage {
-  id             Int      @id @default(autoincrement())
-  apiKeyId       Int      @map("api_key_id")
-  emailAccountId Int      @map("email_account_id")
-  usedAt         DateTime @default(now()) @map("used_at")
+  id             Int              @id @default(autoincrement())
+  apiKeyId       Int              @map("api_key_id")
+  emailAccountId Int              @map("email_account_id")
+  // CLAIMED：已领取（租约中，超时自动回收）；COMPLETED：已用完（不再分配）
+  status         EmailUsageStatus @default(COMPLETED)
+  usedAt         DateTime         @default(now()) @map("used_at")
+  leaseExpiresAt DateTime?        @map("lease_expires_at")
+  completedAt    DateTime?        @map("completed_at")
 
   apiKey       ApiKey       @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
   emailAccount EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
 
   @@unique([apiKeyId, emailAccountId])
+  @@index([status, leaseExpiresAt])
   @@map("email_usage")
 }
 
@@ -175,6 +180,11 @@ enum EmailStatus {
   ACTIVE
   ERROR
   DISABLED
+}
+
+enum EmailUsageStatus {
+  CLAIMED
+  COMPLETED
 }
 
 enum MailFetchStrategy {

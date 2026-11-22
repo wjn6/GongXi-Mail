@@ -7,6 +7,10 @@ export const MAIL_LOG_ACTIONS = {
     LIST_EMAILS: 'list_emails',
     POOL_STATS: 'pool_stats',
     POOL_RESET: 'pool_reset',
+    WAIT_CODE: 'wait_code',
+    CLAIM_EMAIL: 'claim_email',
+    COMPLETE_EMAIL: 'complete_email',
+    RELEASE_EMAIL: 'release_email',
 } as const;
 
 export type MailLogAction = typeof MAIL_LOG_ACTIONS[keyof typeof MAIL_LOG_ACTIONS];

@@ -441,7 +441,7 @@ export const apiKeyApi = {
         }),
 
     getUsage: (id: number, groupName?: string) =>
-        requestGet<{ total: number; used: number; remaining: number }>(`/admin/api-keys/${id}/usage`, {
+        requestGet<{ total: number; used: number; remaining: number; claimed?: number; completed?: number }>(`/admin/api-keys/${id}/usage`, {
             params: { group: groupName },
             cacheMs: 1000,
         }),
