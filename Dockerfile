@@ -34,6 +34,7 @@ COPY --from=builder /app/server/dist ./server/dist
 COPY --from=builder /app/server/node_modules ./server/node_modules
 COPY --from=builder /app/server/package.json ./server/
 COPY --from=builder /app/server/prisma ./server/prisma
+COPY --from=builder /app/server/scripts ./server/scripts
 
 # Copy frontend build to public
 COPY --from=builder /app/web/dist ./public
@@ -41,7 +42,7 @@ COPY --from=builder /app/web/dist ./public
 # Set working directory to server
 WORKDIR /app/server
 
-# Apply committed migrations, then start server
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+# Apply migrations (auto-baselines legacy db-push databases), then start server
+CMD ["sh", "-c", "node scripts/migrate-up.mjs && node dist/index.js"]
 
 EXPOSE 3000

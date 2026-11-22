@@ -204,15 +204,8 @@ API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`�
 项目使用 Prisma Migrate 管理表结构，初始基线在 `server/prisma/migrations/20260222000000_init`。
 
 - 本地开发：改 `schema.prisma` 后用 `npx prisma migrate dev --name <change>` 生成迁移文件并一起提交。
-- 生产/容器：启动时自动执行 `prisma migrate deploy`，只应用已提交的迁移，不会改坏表结构。
-- **已有部署升级**：如果你的数据库此前由 `db push` 维护，首次升级到迁移模式时执行一次：
-
-```bash
-cd server
-npx prisma migrate resolve --applied 20260222000000_init
-```
-
-之后新迁移会正常增量化应用。`db push` 仅保留在开发期快速试验用，不要再用于生产。
+- 生产/容器：容器启动时自动执行 `server/scripts/migrate-up.mjs` —— 全新数据库直接 `migrate deploy`；老库（此前由 `db push` 维护）会自动把基线标记为已应用再 `deploy`，无需任何手动步骤。日常更新只需 `git pull && docker-compose up -d --build`。
+- `db push` 仅保留在开发期快速试验用，不要再用于生产。
 
 ## License
 
