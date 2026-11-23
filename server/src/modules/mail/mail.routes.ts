@@ -25,6 +25,7 @@ import {
     type WaitCodeResult,
 } from '../../lib/wait-code.js';
 import { logger } from '../../lib/logger.js';
+import { getMessageMatchText } from '../../lib/verification-code.js';
 
 /** wait_code 每轮每个文件夹拉取的最新邮件数量 */
 const WAIT_CODE_FETCH_LIMIT = 10;
@@ -44,6 +45,9 @@ const mailRequestSchema = z.object({
 const mailTextRequestSchema = z.object({
     email: z.string().email(),
     match: z.string().min(1).max(200).optional(), // 正则表达式 (可选)
+    mailbox: z.string().default('inbox'),
+    socks5: z.string().optional(),
+    http: z.string().optional(),
 });
 
 // 领取邮箱（带租约）
@@ -108,6 +112,17 @@ function getErrorMessage(err: unknown): string {
     return typeof message === 'string' && message.trim() ? message : 'Unknown error';
 }
 
+/** text/plain 接口的错误文案：校验错误不暴露 zod 细节，未知 500 错误不暴露内部信息 */
+function getTextErrorMessage(err: unknown, statusCode: number): string {
+    if (err && typeof err === 'object' && (err as { name?: unknown }).name === 'ZodError') {
+        return 'Invalid request data';
+    }
+    if (statusCode >= 500 && !(err instanceof AppError)) {
+        return 'Internal server error';
+    }
+    return getErrorMessage(err);
+}
+
 function hasErrorCode(err: unknown, code: string): boolean {
     if (!err || typeof err !== 'object') {
         return false;
@@ -124,6 +139,25 @@ function getGroupNameFromRequest(method: string, query: unknown, body: unknown):
 const mailRoutes: FastifyPluginAsync = async (fastify) => {
     // 所有路由需要 API Key 认证
     fastify.addHook('preHandler', fastify.authenticateApiKey);
+
+    // ========================================
+    // 公共：按 Key 解析邮箱并校验访问范围
+    // ========================================
+    const resolveAccessibleEmail = async (apiKeyId: number, address: string) => {
+        const emailAccount = await emailService.getByEmail(address);
+        if (!emailAccount) {
+            throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
+        }
+        await poolService.assertEmailAccessible(apiKeyId, emailAccount.id, emailAccount.groupId ?? null);
+        return emailAccount;
+    };
+
+    const requireApiKeyId = (apiKey: { id: number } | undefined): number => {
+        if (!apiKey?.id) {
+            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
+        }
+        return apiKey.id;
+    };
 
     // ========================================
     // 新增：获取一个未使用的邮箱地址 (带重试机制)
@@ -253,7 +287,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
-                500,
+                getErrorStatusCode(err),
                 Date.now() - startTime,
                 request.id
             );
@@ -262,114 +296,92 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     // ========================================
-    // 新增：获取最新邮件的纯文本内容 (脚本友好)
+    // 获取最新邮件的纯文本内容（脚本友好，成功与失败均返回 text/plain）
     // ========================================
     fastify.all('/mail_text', apiRouteConfig, async (request, reply) => {
         const startTime = Date.now();
-        const input = mailTextRequestSchema.parse(
-            request.method === 'GET' ? request.query : request.body
-        );
+        let emailAccountId: number | undefined;
 
-        if (!request.apiKey?.id) {
-            reply.code(401).type('text/plain').send('Error: API Key required');
-            return;
-        }
         try {
+            const apiKeyId = requireApiKeyId(request.apiKey);
             fastify.assertApiPermission(request, MAIL_LOG_ACTIONS.MAIL_TEXT);
-        } catch (err: unknown) {
-            const message = getErrorMessage(err);
-            const statusCode = getErrorStatusCode(err);
+            const input = mailTextRequestSchema.parse(getRequestInput(request.method, request.query, request.body));
+
+            let regex: RegExp | undefined;
+            if (input.match) {
+                if (!isSafeUserRegex(input.match)) {
+                    throw new AppError('INVALID_REGEX', 'Regex pattern rejected (too long or potentially catastrophic)', 400);
+                }
+                try {
+                    regex = new RegExp(input.match);
+                } catch {
+                    throw new AppError('INVALID_REGEX', 'Invalid regex pattern', 400);
+                }
+            }
+
+            const emailAccount = await resolveAccessibleEmail(apiKeyId, input.email);
+            emailAccountId = emailAccount.id;
+            const credentials = {
+                id: emailAccount.id,
+                email: emailAccount.email,
+                clientId: emailAccount.clientId,
+                refreshToken: emailAccount.refreshToken!,
+                autoAssigned: false,
+                fetchStrategy: emailAccount.fetchStrategy,
+            };
+
+            let result: Awaited<ReturnType<typeof mailService.getEmails>>;
+            try {
+                result = await mailService.getEmails(credentials, {
+                    mailbox: input.mailbox,
+                    limit: 1, // 只取最新一封
+                    socks5: input.socks5,
+                    http: input.http,
+                });
+            } catch (err: unknown) {
+                await mailService.updateEmailStatus(emailAccount.id, false, getErrorMessage(err));
+                throw err;
+            }
+            await mailService.updateEmailStatus(emailAccount.id, true);
+
+            const latest = result.messages?.[0];
+            if (!latest) {
+                throw new AppError('NO_MESSAGES', 'No messages found', 404);
+            }
+
+            // HTML 转纯文本优先（Graph 的 text 只是 bodyPreview，可能被截断）
+            let content = getMessageMatchText(latest.text, latest.html);
+            if (regex) {
+                const match = content.match(regex);
+                if (!match) {
+                    throw new AppError('NO_MATCH', 'No match found', 404);
+                }
+                // 有捕获组时返回第一个捕获组，否则返回整体匹配
+                content = match[1] ?? match[0];
+            }
+
             await mailService.logApiCall(
                 MAIL_LOG_ACTIONS.MAIL_TEXT,
-                request.apiKey?.id,
-                undefined,
-                request.ip,
-                statusCode,
-                Date.now() - startTime,
-                request.id
-            );
-            reply.code(statusCode).type('text/plain').send(`Error: ${message}`);
-            return;
-        }
-
-        const emailAccount = await emailService.getByEmail(input.email);
-        if (!emailAccount) {
-            reply.code(404).type('text/plain').send('Error: Email account not found');
-            return;
-        }
-        await poolService.assertEmailAccessible(request.apiKey.id, emailAccount.id, emailAccount.groupId ?? null);
-
-        const credentials = {
-            id: emailAccount.id,
-            email: emailAccount.email,
-            clientId: emailAccount.clientId,
-            refreshToken: emailAccount.refreshToken!,
-            autoAssigned: false,
-            fetchStrategy: emailAccount.fetchStrategy,
-        };
-
-        try {
-            const result = await mailService.getEmails(credentials, {
-                mailbox: 'inbox',
-                limit: 1, // 只取最新一封
-            });
-
-            await mailService.updateEmailStatus(credentials.id, true);
-            await mailService.logApiCall(
-                MAIL_LOG_ACTIONS.MAIL_TEXT,
-                request.apiKey.id,
-                credentials.id,
+                apiKeyId,
+                emailAccount.id,
                 request.ip,
                 200,
                 Date.now() - startTime,
                 request.id
             );
-
-            if (!result.messages || result.messages.length === 0) {
-                reply.code(404).type('text/plain').send('Error: No messages found');
-                return;
-            }
-
-            const message = result.messages[0];
-            // 优先使用 text 字段
-            let content = message.text || '';
-
-            // 如果指定了正则匹配
-            if (input.match) {
-                if (!isSafeUserRegex(input.match)) {
-                    reply.code(400).type('text/plain').send('Error: Regex pattern rejected (too long or potentially catastrophic)');
-                    return;
-                }
-                try {
-                    const regex = new RegExp(input.match);
-                    const match = content.match(regex);
-                    if (match) {
-                        // 如果有捕获组，返回第一个捕获组；否则返回整个匹配
-                        content = match[1] || match[0];
-                    } else {
-                        reply.code(404).type('text/plain').send('Error: No match found');
-                        return;
-                    }
-                } catch (_e) {
-                    reply.code(400).type('text/plain').send('Error: Invalid regex pattern');
-                    return;
-                }
-            }
-
-            return reply.type('text/plain').send(content);
-
+            return reply.type('text/plain; charset=utf-8').send(content);
         } catch (err: unknown) {
-            await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));
+            const statusCode = getErrorStatusCode(err);
             await mailService.logApiCall(
                 MAIL_LOG_ACTIONS.MAIL_TEXT,
-                request.apiKey.id,
-                credentials.id,
+                request.apiKey?.id,
+                emailAccountId,
                 request.ip,
-                500,
+                statusCode,
                 Date.now() - startTime,
                 request.id
             );
-            reply.code(500).type('text/plain').send(`Error: ${getErrorMessage(err)}`);
+            return reply.code(statusCode).type('text/plain; charset=utf-8').send(`Error: ${getTextErrorMessage(err, statusCode)}`);
         }
     });
 
@@ -433,7 +445,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
-                500,
+                getErrorStatusCode(err),
                 Date.now() - startTime,
                 request.id
             );
@@ -501,7 +513,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 request.apiKey.id,
                 credentials.id,
                 request.ip,
-                500,
+                getErrorStatusCode(err),
                 Date.now() - startTime,
                 request.id
             );
@@ -646,25 +658,6 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             throw err;
         }
     });
-
-    // ========================================
-    // 公共：按 Key 解析邮箱并校验访问范围
-    // ========================================
-    const resolveAccessibleEmail = async (apiKeyId: number, address: string) => {
-        const emailAccount = await emailService.getByEmail(address);
-        if (!emailAccount) {
-            throw new AppError('EMAIL_NOT_FOUND', 'Email account not found', 404);
-        }
-        await poolService.assertEmailAccessible(apiKeyId, emailAccount.id, emailAccount.groupId ?? null);
-        return emailAccount;
-    };
-
-    const requireApiKeyId = (apiKey: { id: number } | undefined): number => {
-        if (!apiKey?.id) {
-            throw new AppError('AUTH_REQUIRED', 'API Key required', 401);
-        }
-        return apiKey.id;
-    };
 
     // ========================================
     // 领取邮箱（带租约，到期自动回收）
@@ -931,7 +924,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             );
 
             if (wantsText) {
-                return reply.type('text/plain').send(result.code);
+                return reply.type('text/plain; charset=utf-8').send(result.code);
             }
 
             return {
@@ -954,7 +947,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 request.id
             );
             if (wantsText) {
-                return reply.code(statusCode).type('text/plain').send(`Error: ${getErrorMessage(err)}`);
+                return reply.code(statusCode).type('text/plain; charset=utf-8').send(`Error: ${getTextErrorMessage(err, statusCode)}`);
             }
             throw err;
         } finally {

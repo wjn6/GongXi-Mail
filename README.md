@@ -121,121 +121,111 @@ npm run test
 
 ## API 文档
 
-### 外部 API (`/api/*`)
+后台「API 文档」页面有完整的参数、响应和错误码说明，下面是摘要。代码位于 `server/src/modules/mail/mail.routes.ts`。
 
-需要在 HTTP Header 中携带 API Key：`X-API-Key: sk_xxx`
+### 通用约定
 
-#### 接口列表
+- **认证**：`X-API-Key: sk_xxx`（推荐），或 `Authorization: Bearer sk_xxx`，或 URL 参数 `?api_key=sk_xxx`（不推荐）。
+- **请求**：所有 `/api/*` 接口都接受 GET 和 POST。GET 参数放查询串，POST 参数放 JSON body，并且必须带 `Content-Type: application/json`。
+  GET 参数含正则等特殊字符时需要 URL 编码（curl 用 `-G --data-urlencode`）。
+- **响应**：成功 `{"success": true, "data": {...}}`；失败 `{"success": false, "requestId": "...", "error": {"code": "...", "message": "..."}}`。
+  `mail_text` 和 `wait_code?format=text` 返回 `text/plain`，失败内容为 `Error: 原因`，状态码与 JSON 一致；认证、权限、限流错误始终是 JSON。
+- **范围**：API Key 的「可用分组 / 可用邮箱」限制所有接口能访问的邮箱。
+- **限流**：按 Key 每分钟 `rateLimit` 次（默认 60），不参与全局 IP 限流。
 
-| 接口 | 说明 | 注意事项 |
-|------|------|----------|
-| `/api/get-email` | 获取一个未使用的邮箱地址 | 会标记为当前 Key 已使用 |
-| `/api/mail_new` | 获取最新邮件 | - |
-| `/api/mail_text` | 获取最新邮件文本 (脚本友好) | 可用正则提取内容 |
-| `/api/mail_all` | 获取所有邮件 | - |
-| `/api/process-mailbox` | 清空邮箱 | `data.deletedCount` 为删除数量 |
-| `/api/list-emails` | 获取系统所有可用邮箱 | - |
-| `/api/pool-stats` | 邮箱池统计 | - |
-| `/api/reset-pool` | 重置分配记录 | 释放当前 Key 占用的所有邮箱标记 |
-| `/api/claim-email` | 领取邮箱（带租约） | 租约到期未完成/释放会自动回收 |
-| `/api/complete-email` | 完成领取 | 邮箱标记为已用完，不再分配；幂等 |
-| `/api/release-email` | 释放领取 | 邮箱回到池中；已完成的不能释放 |
-| `/api/wait_code` | 长轮询等待验证码 | 服务端持续收信直到拿到新验证码或超时 |
+### 接口列表
 
-#### 使用流程
+| 接口 | 权限键 | 说明 |
+|------|--------|------|
+| `/api/claim-email` | `claim_email` | 领取邮箱（带租约，默认 600 秒），到期未处理自动回收 |
+| `/api/complete-email` | `complete_email` | 完成领取，邮箱不再分配给该 Key；幂等 |
+| `/api/release-email` | `release_email` | 释放领取，邮箱回到池中；已完成的不能释放 |
+| `/api/get-email` | `get_email` | 分配邮箱并立即永久标记已用（无租约） |
+| `/api/pool-stats` | `pool_stats` | 邮箱池统计：`total` / `used` / `remaining` / `claimed` / `completed` |
+| `/api/reset-pool` | `pool_reset` | 清除该 Key 的分配记录（已用完和领取中都清除） |
+| `/api/list-emails` | `list_emails` | 可用范围内正常状态的邮箱列表（最多 1000 个） |
+| `/api/wait_code` | `wait_code` | 长轮询等待新验证码，超时 404 `CODE_TIMEOUT` |
+| `/api/mail_text` | `mail_text` | 最新一封邮件的纯文本，可用正则提取（`text/plain`） |
+| `/api/mail_new` | `mail_new` | 最新一封邮件（JSON） |
+| `/api/mail_all` | `mail_all` | 文件夹内邮件，从新到旧最多 100 封（JSON） |
+| `/api/process-mailbox` | `process_mailbox` | 清空文件夹（仅 Graph，分组策略为 `IMAP_ONLY` 时不可用） |
 
-1. **获取邮箱**：
-   ```bash
-   curl -X POST "/api/get-email" -H "X-API-Key: sk_xxx"
-   # {"success": true, "data": {"email": "xxx@outlook.com"}}
-   ```
+### 推荐流程
 
-2. **获取邮件内容 (推荐)**：
-   自动提取验证码（6位数字）：
-   ```bash
-   curl "/api/mail_text?email=xxx@outlook.com&match=\\d{6}" -H "X-API-Key: sk_xxx"
-   # 返回: 123456
-   ```
+```bash
+KEY="sk_xxx"; BASE="http://localhost:3000"
 
-3. **获取完整邮件 (JSON)**：
-   ```bash
-   curl -X POST "/api/mail_new" -H "X-API-Key: sk_xxx" \
-     -d '{"email": "xxx@outlook.com"}'
-   ```
+# 1. 领取（租约 15 分钟）
+EMAIL=$(curl -s -X POST "$BASE/api/claim-email" -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" -d '{"group": "aws", "lease": 900}' | jq -r .data.email)
 
-4. **领取流程（推荐，失败可归还）**：
-   ```bash
-   # 领取，租约 15 分钟（默认 600 秒，范围 30~86400）
-   curl -X POST "/api/claim-email" -H "X-API-Key: sk_xxx" -d '{"group": "aws", "lease": 900}'
-   # 业务成功：标记已用完，之后不再分配给该 Key
-   curl -X POST "/api/complete-email" -H "X-API-Key: sk_xxx" -d '{"email": "xxx@outlook.com"}'
-   # 业务失败：归还到池中，可被再次领取
-   curl -X POST "/api/release-email" -H "X-API-Key: sk_xxx" -d '{"email": "xxx@outlook.com"}'
-   ```
-   `/api/get-email` 保持原语义（分配即永久标记已用），已有调用方无需修改。
+# 2. 用 $EMAIL 在目标网站触发发送验证码
 
-5. **等待验证码（长轮询）**：触发目标站点发送验证码后调用，服务端每隔 `interval` 秒收信，
-   直到 `since` 之后到达的邮件中出现验证码才返回，超时返回 404 `CODE_TIMEOUT`：
-   ```bash
-   curl --max-time 100 "/api/wait_code?email=xxx@outlook.com&timeout=90&format=text" -H "X-API-Key: sk_xxx"
-   # 返回: 482913
-   ```
+# 3. 等待验证码（最长 90 秒，客户端超时要更长）
+CODE=$(curl -s --max-time 100 "$BASE/api/wait_code?email=$EMAIL&timeout=90&format=text" -H "X-API-Key: $KEY")
 
-#### 参数说明
+# 4. 成功标记已用完；失败改调 /api/release-email 归还
+curl -s -X POST "$BASE/api/complete-email" -H "X-API-Key: $KEY" \
+  -H "Content-Type: application/json" -d "{\"email\": \"$EMAIL\"}"
+```
 
-**通用参数**：
-| 参数 | 说明 |
-|------|------|
-| email | 邮箱地址（必填） |
-| mailbox | 文件夹：inbox/junk |
-| socks5 | SOCKS5 代理 |
-| http | HTTP 代理 |
+只读取一次最新邮件（不等待）：
 
-**`/api/mail_text` 专用参数**：
-| 参数 | 说明 |
-|------|------|
-| match | 正则表达式，用于提取特定内容 (例如 `\d{6}`) |
+```bash
+curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
+  --data-urlencode "email=xxx@outlook.com" --data-urlencode 'match=\d{6}'
+# 返回: 123456
+```
 
-**`/api/wait_code` 参数**：
-| 参数 | 说明 |
-|------|------|
-| email | 邮箱地址（必填） |
-| match | 正则表达式，有捕获组时返回第一个捕获组；不填则自动识别 4-8 位数字验证码 |
-| timeout | 最长等待秒数，默认 60，范围 5~180（客户端 HTTP 超时需更长） |
-| interval | 收信间隔秒数，默认 5，范围 3~30 |
-| since | 只看此时间之后的邮件（ISO 或 Unix 时间戳）；默认取当前 Key 的领取/分配时间（不早于 10 分钟前），否则为请求前 60 秒 |
-| mailbox | `inbox` / `junk` / `all`，默认 `all` |
-| format | `json`（默认）或 `text`（只返回验证码） |
+### 参数
 
-单个 API Key 同时最多 10 个 `wait_code` 请求，一次等待只计入一次按 Key 限流。
+| 参数 | 适用接口 | 说明 |
+|------|----------|------|
+| `email` | 除分配类外全部 | 邮箱地址，必填，需与系统中保存的地址完全一致 |
+| `group` | claim / get-email、pool-stats、reset-pool、list-emails | 分组名，可选 |
+| `lease` | claim-email | 租约秒数，默认 600，范围 30~86400 |
+| `mailbox` | mail_new、mail_all、mail_text、process-mailbox | `inbox`（默认）/ `junk`，不区分大小写 |
+| `mailbox` | wait_code | `inbox` / `junk` / `all`（默认） |
+| `match` | mail_text、wait_code | 正则，有捕获组时返回第一个捕获组；`wait_code` 不填时自动识别 4~8 位数字验证码 |
+| `timeout` | wait_code | 最长等待秒数，默认 60，范围 5~180 |
+| `interval` | wait_code | 收信间隔秒数，默认 5，范围 3~30 |
+| `since` | wait_code | 只看此时间之后的邮件（ISO 或 Unix 秒 / 毫秒）；默认取该 Key 的领取 / 分配时间（最早 10 分钟前），否则为请求前 60 秒 |
+| `format` | wait_code | `json`（默认）或 `text` |
+| `socks5` / `http` | 收信类与 process-mailbox | 出站代理，未传时使用 `HTTPS_PROXY` / `HTTP_PROXY` |
 
-**`/api/claim-email` 参数**：`group`（分组名，可选）、`lease`（租约秒数，默认 600）。
-**`/api/complete-email`、`/api/release-email` 参数**：`email`（必填）。
+单个 Key 同时最多 10 个 `wait_code` 请求，一次等待只计一次限流。走 Graph 时邮件的 `text` 只是摘要，完整内容在 `html`。
 
-## 操作日志 Action 命名
+### 错误码
 
-`/admin/dashboard/logs` 中 `action` 字段使用以下固定值：
+| 错误码 | HTTP | 说明 |
+|--------|------|------|
+| `UNAUTHORIZED` / `INVALID_API_KEY` | 401 | 未携带 / 无效的 API Key |
+| `API_KEY_DISABLED` / `API_KEY_EXPIRED` | 403 | Key 已禁用 / 已过期 |
+| `FORBIDDEN_PERMISSION` | 403 | Key 没有该接口的权限键 |
+| `RATE_LIMIT_EXCEEDED` | 429 | 超过每分钟调用次数 |
+| `VALIDATION_ERROR` | 400 | 参数缺失或格式错误 |
+| `EMAIL_NOT_FOUND` / `EMAIL_FORBIDDEN` | 404 / 403 | 邮箱不存在 / 不在 Key 可用范围内 |
+| `GROUP_NOT_FOUND` / `GROUP_FORBIDDEN` | 404 / 403 | 分组不存在 / 不在 Key 可用范围内 |
+| `NO_UNUSED_EMAIL` | 400 | 没有可分配的邮箱 |
+| `CONCURRENCY_LIMIT` | 429 | 分配并发冲突，稍后重试 |
+| `CLAIM_NOT_FOUND` | 404 | 该 Key 没有领取过这个邮箱 |
+| `ALREADY_COMPLETED` | 409 | 已完成的邮箱不能释放 |
+| `CODE_TIMEOUT` | 404 | `wait_code` 超时没等到验证码 |
+| `INVALID_REGEX` / `INVALID_SINCE` | 400 | 正则无效或被拒绝 / since 无法解析 |
+| `TOO_MANY_WAITS` | 429 | 同一 Key 等待中的请求超过 10 个 |
+| `NO_MESSAGES` / `NO_MATCH` | 404 | `mail_text` 没有邮件 / 正则没匹配 |
+| `GRAPH_TOKEN_FAILED` / `GRAPH_SCOPE_MISSING` / `IMAP_TOKEN_FAILED` | 502 | 获取访问令牌失败或缺少权限 |
+| `MAILBOX_CLEAR_UNSUPPORTED` | 400 | 分组策略为 `IMAP_ONLY`，不能清空 |
+| `GRAPH_API_FAILED` | 500 | 清空邮箱时获取 Graph 访问令牌失败 |
 
-| Action | 含义 |
-|--------|------|
-| `get_email` | 分配邮箱 |
-| `mail_new` | 获取最新邮件 |
-| `mail_text` | 获取邮件文本 |
-| `mail_all` | 获取所有邮件 |
-| `process_mailbox` | 清空邮箱 |
-| `list_emails` | 获取邮箱列表 |
-| `pool_stats` | 邮箱池统计 |
-| `pool_reset` | 重置邮箱池 |
-| `wait_code` | 等待验证码 |
-| `claim_email` | 领取邮箱 |
-| `complete_email` | 完成领取 |
-| `release_email` | 释放领取 |
+## 操作日志 Action 与 API Key 权限键
 
-## API Key 权限键
+每次外部调用都会记录到 `/admin/dashboard/logs`，`action` 与 API Key 的 `permissions` 使用同一套值，
+对应关系见上方「接口列表」的权限键列（注意 `/api/reset-pool` 的权限键是 `pool_reset`）。
 
-API Key 的 `permissions` 使用与上表一致的 action 值（如 `mail_new`、`process_mailbox`）。  
-未配置 `permissions` 时默认允许全部接口。已配置权限的旧 Key 需要在后台勾选新增的
-`wait_code` / `claim_email` / `complete_email` / `release_email` 后才能调用对应接口。
+未配置 `permissions` 时默认允许全部接口；配置了权限的旧 Key 需要在后台勾选
+`wait_code` / `claim_email` / `complete_email` / `release_email` 后才能调用新接口。
+两端定义分别在 `server/src/modules/mail/mail.actions.ts` 与 `web/src/constants/logActions.ts`，需保持一致。
 
 ## 生产配置要求
 

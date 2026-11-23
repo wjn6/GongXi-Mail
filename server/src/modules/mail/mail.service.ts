@@ -46,6 +46,7 @@ interface GraphMessage {
         content?: string;
     };
     createdDateTime?: string;
+    receivedDateTime?: string;
 }
 
 interface GraphMessagesResponse {
@@ -216,7 +217,7 @@ export const mailService = {
                 subject: item.subject || '',
                 text: item.bodyPreview || '',
                 html: item.body?.content || '',
-                date: item.createdDateTime || '',
+                date: item.receivedDateTime || item.createdDateTime || '',
             }));
         } catch (err) {
             logger.error({ err }, 'Failed to fetch emails via Graph API');
