@@ -81,10 +81,22 @@ const GROUP_ERRORS: ApiErrorCode[] = [
   { code: 'GROUP_NOT_FOUND', status: 404, desc: 'group 指定的分组不存在' },
   { code: 'GROUP_FORBIDDEN', status: 403, desc: '分组不在当前 API Key 的可用范围内' },
 ];
+// 同一个 refresh token 用于 Graph 和 IMAP：账号层面的问题两条路径都会失败，使用专门的错误码
+const ACCOUNT_TOKEN_ERRORS: ApiErrorCode[] = [
+  { code: 'REFRESH_TOKEN_INVALID', status: 502, desc: '刷新令牌无效、过期、被吊销或与客户端 ID 不匹配（如 AADSTS70000），需要重新授权' },
+  { code: 'ACCOUNT_ACTION_REQUIRED', status: 502, desc: '微软要求该账号交互登录（二次验证、安全检查）' },
+  { code: 'CONSENT_REQUIRED', status: 502, desc: '应用未获得该账号的授权' },
+  { code: 'CLIENT_ID_INVALID', status: 502, desc: '客户端 ID 无效或不能用于该账号' },
+  { code: 'MS_ACCOUNT_UNAVAILABLE', status: 502, desc: '微软账号不存在、被禁用或被锁定' },
+];
+
 const FETCH_ERRORS: ApiErrorCode[] = [
-  { code: 'GRAPH_TOKEN_FAILED', status: 502, desc: '获取 Graph 访问令牌失败（refresh token 失效或代理不可用）' },
+  ...ACCOUNT_TOKEN_ERRORS,
+  { code: 'GRAPH_TOKEN_FAILED', status: 502, desc: '获取 Graph 访问令牌失败（网络、代理或其它原因，message 中带微软返回的原因）' },
   { code: 'GRAPH_SCOPE_MISSING', status: 502, desc: '令牌缺少 Mail.Read 权限' },
-  { code: 'IMAP_TOKEN_FAILED', status: 502, desc: '获取 IMAP 访问令牌失败' },
+  { code: 'IMAP_TOKEN_FAILED', status: 502, desc: '获取 IMAP 访问令牌失败（同上）' },
+  { code: 'GRAPH_FETCH_FAILED', status: 502, desc: '拿到令牌后通过 Graph 读取邮件失败' },
+  { code: 'IMAP_FETCH_FAILED', status: 502, desc: '拿到令牌后通过 IMAP 读取邮件失败（连接、登录或超时）' },
 ];
 
 const MESSAGE_FIELDS_NOTE = '邮件字段：id、from、subject、text、html、date（ISO 时间）。走 Graph 时 text 只是摘要（约 255 字），完整内容请读 html；method 为 graph_api 或 imap。';
@@ -454,7 +466,8 @@ curl -G --max-time 100 "${baseUrl}/api/wait_code" \\
 }`,
     errors: [
       { code: 'MAILBOX_CLEAR_UNSUPPORTED', status: 400, desc: '分组策略为「仅 IMAP」' },
-      { code: 'GRAPH_API_FAILED', status: 500, desc: '获取 Graph 访问令牌失败' },
+      ...ACCOUNT_TOKEN_ERRORS,
+      { code: 'GRAPH_API_FAILED', status: 500, desc: '获取 Graph 访问令牌失败（其它原因）' },
       ...EMAIL_LOOKUP_ERRORS,
     ],
   },
@@ -792,6 +805,7 @@ const ApiDocsPage: React.FC = () => {
           <li>POST 必须带 <Text code>Content-Type: application/json</Text>，否则 body 不会被解析。</li>
           <li>GET 参数里有正则等特殊字符时需要 URL 编码，curl 可用 <Text code>-G --data-urlencode</Text>。</li>
           <li>API Key 的「可用分组 / 可用邮箱」会限制所有接口能访问的邮箱范围。</li>
+          <li>分组策略为「Graph 优先 / IMAP 优先」时，两条路径都失败会合并成一个错误：<Text code>error.code</Text> 优先取账号层面的原因（如 <Text code>REFRESH_TOKEN_INVALID</Text>），<Text code>error.details.attempts</Text> 按顺序列出每条路径各自的错误。</li>
         </ul>
 
         <SectionTitle>响应格式</SectionTitle>

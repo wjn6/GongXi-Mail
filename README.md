@@ -195,6 +195,9 @@ curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
 
 单个 Key 同时最多 10 个 `wait_code` 请求，一次等待只计一次限流。走 Graph 时邮件的 `text` 只是摘要，完整内容在 `html`。
 
+分组策略为「Graph 优先 / IMAP 优先」时，两条路径都失败会合并成一个错误：`error.code` 优先取账号层面的原因
+（Graph 和 IMAP 用同一个 refresh token，令牌失效时两边都会失败），`error.details.attempts` 按顺序列出每条路径各自的错误。
+
 ### 错误码
 
 | 错误码 | HTTP | 说明 |
@@ -214,7 +217,11 @@ curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
 | `INVALID_REGEX` / `INVALID_SINCE` | 400 | 正则无效或被拒绝 / since 无法解析 |
 | `TOO_MANY_WAITS` | 429 | 同一 Key 等待中的请求超过 10 个 |
 | `NO_MESSAGES` / `NO_MATCH` | 404 | `mail_text` 没有邮件 / 正则没匹配 |
-| `GRAPH_TOKEN_FAILED` / `GRAPH_SCOPE_MISSING` / `IMAP_TOKEN_FAILED` | 502 | 获取访问令牌失败或缺少权限 |
+| `REFRESH_TOKEN_INVALID` | 502 | 刷新令牌无效、过期、被吊销或与客户端 ID 不匹配（如 AADSTS70000），需要重新授权 |
+| `ACCOUNT_ACTION_REQUIRED` / `CONSENT_REQUIRED` | 502 | 微软要求交互登录（二次验证等） / 应用未获授权 |
+| `CLIENT_ID_INVALID` / `MS_ACCOUNT_UNAVAILABLE` | 502 | 客户端 ID 无效 / 微软账号不存在、被禁用或锁定 |
+| `GRAPH_TOKEN_FAILED` / `GRAPH_SCOPE_MISSING` / `IMAP_TOKEN_FAILED` | 502 | 获取访问令牌失败（其它原因，message 带微软原因）或缺少权限 |
+| `GRAPH_FETCH_FAILED` / `IMAP_FETCH_FAILED` | 502 | 拿到令牌后读取邮件失败 |
 | `MAILBOX_CLEAR_UNSUPPORTED` | 400 | 分组策略为 `IMAP_ONLY`，不能清空 |
 | `GRAPH_API_FAILED` | 500 | 清空邮箱时获取 Graph 访问令牌失败 |
 

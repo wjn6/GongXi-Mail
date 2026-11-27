@@ -3,6 +3,24 @@ import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
 import { setCache, getCache, deleteCache } from '../../lib/redis.js';
 import { hasMailSendScope } from '../../lib/send-mail.js';
+import {
+    combineFetchFailures,
+    fetchFailureFromError,
+    formatOAuthFailure,
+    networkOAuthFailure,
+    parseOAuthTokenError,
+    tokenFailureToFetchFailure,
+    unknownOAuthFailure,
+    type FetchFailure,
+    type FetchMethod,
+    type OAuthFailure,
+} from '../../lib/oauth-error.js';
+
+type TokenAttempt<T> = ({ ok: true } & T) | { ok: false; failure: OAuthFailure };
+
+function toAppError(failure: FetchFailure | ReturnType<typeof combineFetchFailures>): AppError {
+    return new AppError(failure.code, failure.message, failure.statusCode, 'details' in failure ? failure.details : undefined);
+}
 import { proxyFetch } from '../../lib/proxy.js';
 import prisma from '../../lib/prisma.js';
 import Imap from 'node-imap';
@@ -113,14 +131,14 @@ export const mailService = {
     async getGraphAccessToken(
         credentials: Credentials,
         proxyConfig?: { socks5?: string; http?: string }
-    ): Promise<{ accessToken: string; hasMailRead: boolean } | null> {
+    ): Promise<TokenAttempt<{ accessToken: string; hasMailRead: boolean }>> {
         const cacheKey = `graph_api_access_token_${credentials.email}`;
 
         // 尝试从缓存获取（缓存的 token 一定有 Mail.Read 权限）
         const cachedToken = await getCache(cacheKey);
         if (cachedToken) {
             logger.debug({ email: credentials.email }, 'Using cached Graph API token');
-            return { accessToken: cachedToken, hasMailRead: true };
+            return { ok: true, accessToken: cachedToken, hasMailRead: true };
         }
 
         try {
@@ -143,8 +161,9 @@ export const mailService = {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                logger.error({ email: credentials.email, status: response.status, error: errorText }, 'Graph API token request failed');
-                return null;
+                const failure = parseOAuthTokenError(response.status, errorText);
+                logger.error({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts, error: errorText }, 'Graph API token request failed');
+                return { ok: false, failure };
             }
 
             const data = await response.json() as OAuthTokenResponse;
@@ -156,7 +175,7 @@ export const mailService = {
 
             if (!accessToken) {
                 logger.warn({ email: credentials.email }, 'Graph API token missing access_token');
-                return null;
+                return { ok: false, failure: unknownOAuthFailure('Token response missing access_token') };
             }
 
             if (hasMailRead) {
@@ -167,10 +186,10 @@ export const mailService = {
                 logger.warn({ email: credentials.email }, 'No Mail.Read scope in token, will fallback to IMAP');
             }
 
-            return { accessToken, hasMailRead };
+            return { ok: true, accessToken, hasMailRead };
         } catch (err) {
             logger.error({ err, email: credentials.email }, 'Failed to get Graph API token');
-            return null;
+            return { ok: false, failure: networkOAuthFailure(getErrorMessage(err)) };
         }
     },
 
@@ -208,15 +227,9 @@ export const mailService = {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                let message = `HTTP ${response.status}`;
-                try {
-                    const parsed = JSON.parse(errorText) as { error_description?: string; error?: string };
-                    message = parsed.error_description || parsed.error || message;
-                } catch {
-                    message = errorText.slice(0, 200) || message;
-                }
-                logger.warn({ email: credentials.email, status: response.status }, 'Graph send token request failed');
-                return { error: message.slice(0, 300) };
+                const failure = parseOAuthTokenError(response.status, errorText);
+                logger.warn({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts }, 'Graph send token request failed');
+                return { error: formatOAuthFailure(failure).slice(0, 400) };
             }
 
             const data = await response.json() as OAuthTokenResponse;
@@ -332,13 +345,13 @@ export const mailService = {
     async getImapAccessToken(
         credentials: Credentials,
         proxyConfig?: { socks5?: string; http?: string }
-    ): Promise<string | null> {
+    ): Promise<TokenAttempt<{ accessToken: string }>> {
         const cacheKey = `imap_api_access_token_${credentials.email}`;
 
         const cachedToken = await getCache(cacheKey);
         if (cachedToken) {
             logger.debug({ email: credentials.email }, 'Using cached IMAP token');
-            return cachedToken;
+            return { ok: true, accessToken: cachedToken };
         }
 
         try {
@@ -361,24 +374,25 @@ export const mailService = {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                logger.error({ email: credentials.email, status: response.status, error: errorText }, 'IMAP token request failed');
-                return null;
+                const failure = parseOAuthTokenError(response.status, errorText);
+                logger.error({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts, error: errorText }, 'IMAP token request failed');
+                return { ok: false, failure };
             }
 
             const data = await response.json() as OAuthTokenResponse;
             const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
             if (!accessToken) {
                 logger.warn({ email: credentials.email }, 'IMAP token missing access_token');
-                return null;
+                return { ok: false, failure: unknownOAuthFailure('Token response missing access_token') };
             }
 
             const expireTime = ((typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60);
             await setCache(cacheKey, accessToken, expireTime);
 
-            return accessToken;
+            return { ok: true, accessToken };
         } catch (err) {
             logger.error({ err, email: credentials.email }, 'Failed to get IMAP token');
-            return null;
+            return { ok: false, failure: networkOAuthFailure(getErrorMessage(err)) };
         }
     },
 
@@ -545,20 +559,25 @@ export const mailService = {
 
         const fetchViaGraph = async () => {
             const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
-            if (!tokenResult) {
-                throw new AppError('GRAPH_TOKEN_FAILED', 'Failed to get Graph API access token', 502);
+            if (!tokenResult.ok) {
+                throw toAppError(tokenFailureToFetchFailure('graph', tokenResult.failure));
             }
             if (!tokenResult.hasMailRead) {
                 throw new AppError('GRAPH_SCOPE_MISSING', 'Graph token missing Mail.Read scope', 502);
             }
 
             logger.info({ email: credentials.email, strategy }, 'Using Graph API for email retrieval');
-            const messages = await this.getEmailsViaGraphApi(
-                tokenResult.accessToken,
-                options.mailbox,
-                limit,
-                proxyConfig
-            );
+            let messages: EmailMessage[];
+            try {
+                messages = await this.getEmailsViaGraphApi(
+                    tokenResult.accessToken,
+                    options.mailbox,
+                    limit,
+                    proxyConfig
+                );
+            } catch (err) {
+                throw toAppError(fetchFailureFromError('graph', err));
+            }
 
             return {
                 email: credentials.email,
@@ -572,17 +591,22 @@ export const mailService = {
         const fetchViaImap = async () => {
             logger.info({ email: credentials.email, strategy }, 'Using IMAP for email retrieval');
             const imapToken = await this.getImapAccessToken(credentials, proxyConfig);
-            if (!imapToken) {
-                throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
+            if (!imapToken.ok) {
+                throw toAppError(tokenFailureToFetchFailure('imap', imapToken.failure));
             }
 
-            const authString = this.generateAuthString(credentials.email, imapToken);
-            const messages = await this.getEmailsViaImap(
-                credentials.email,
-                authString,
-                options.mailbox,
-                limit
-            );
+            const authString = this.generateAuthString(credentials.email, imapToken.accessToken);
+            let messages: EmailMessage[];
+            try {
+                messages = await this.getEmailsViaImap(
+                    credentials.email,
+                    authString,
+                    options.mailbox,
+                    limit
+                );
+            } catch (err) {
+                throw toAppError(fetchFailureFromError('imap', err));
+            }
 
             return {
                 email: credentials.email,
@@ -601,21 +625,35 @@ export const mailService = {
             return fetchViaImap();
         }
 
-        if (strategy === 'IMAP_FIRST') {
+        // 主路径失败后回退；两条都失败时合并两边的原因，不只报最后一个
+        const withFallback = async <T>(
+            primaryMethod: FetchMethod,
+            primary: () => Promise<T>,
+            fallbackMethod: FetchMethod,
+            fallback: () => Promise<T>
+        ): Promise<T> => {
+            let primaryErr: unknown;
             try {
-                return await fetchViaImap();
-            } catch (imapErr) {
-                logger.warn({ imapErr, email: credentials.email }, 'IMAP failed, fallback to Graph API');
-                return fetchViaGraph();
+                return await primary();
+            } catch (err) {
+                primaryErr = err;
+                logger.warn({ err, email: credentials.email, strategy }, `${primaryMethod} failed, fallback to ${fallbackMethod}`);
             }
+            try {
+                return await fallback();
+            } catch (fallbackErr) {
+                throw toAppError(combineFetchFailures(
+                    fetchFailureFromError(primaryMethod, primaryErr),
+                    fetchFailureFromError(fallbackMethod, fallbackErr)
+                ));
+            }
+        };
+
+        if (strategy === 'IMAP_FIRST') {
+            return withFallback('imap', fetchViaImap, 'graph', fetchViaGraph);
         }
 
-        try {
-            return await fetchViaGraph();
-        } catch (graphErr) {
-            logger.warn({ graphErr, email: credentials.email }, 'Graph API failed, fallback to IMAP');
-            return fetchViaImap();
-        }
+        return withFallback('graph', fetchViaGraph, 'imap', fetchViaImap);
     },
 
     /**
@@ -639,8 +677,8 @@ export const mailService = {
         const proxyConfig = { socks5: options.socks5, http: options.http };
         const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
 
-        if (!tokenResult) {
-            throw new AppError('GRAPH_API_FAILED', 'Failed to get access token', 500);
+        if (!tokenResult.ok) {
+            throw toAppError(tokenFailureToFetchFailure('graph', tokenResult.failure, { code: 'GRAPH_API_FAILED', statusCode: 500 }));
         }
 
         // 1. 获取所有邮件 ID

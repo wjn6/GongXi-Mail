@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger.js';
 import { proxyFetch } from '../../lib/proxy.js';
 import { env } from '../../config/env.js';
 import type { Prisma } from '@prisma/client';
+import { formatOAuthFailure, parseOAuthTokenError } from '../../lib/oauth-error.js';
 
 export type TokenRefreshTrigger = 'AUTO' | 'MANUAL';
 
@@ -369,13 +370,8 @@ export const tokenRefreshService = {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                let errorMsg = `HTTP ${response.status}`;
-                try {
-                    const errorJson = JSON.parse(errorText) as OAuthTokenResponse;
-                    errorMsg = errorJson.error_description || errorJson.error || errorMsg;
-                } catch {
-                    errorMsg = errorText.substring(0, 200);
-                }
+                // 去掉 Trace ID 等噪声，账号层面的问题（如 refresh token 失效）附带处理建议
+                const errorMsg = formatOAuthFailure(parseOAuthTokenError(response.status, errorText));
 
                 logger.warn({ email: account.email, emailId, status: response.status }, `Token 刷新失败: ${errorMsg}`);
                 await prisma.emailAccount.update({
