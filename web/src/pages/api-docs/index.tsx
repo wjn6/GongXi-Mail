@@ -83,6 +83,7 @@ const GROUP_ERRORS: ApiErrorCode[] = [
 ];
 // 同一个 refresh token 用于 Graph 和 IMAP：账号层面的问题两条路径都会失败，使用专门的错误码
 const ACCOUNT_TOKEN_ERRORS: ApiErrorCode[] = [
+  { code: 'OAUTH_ENDPOINT_MISMATCH', status: 502, desc: '分组的微软登录端点与客户端 ID 支持的账号类型不一致（如 AADSTS9002331），在邮箱分组中修改' },
   { code: 'REFRESH_TOKEN_INVALID', status: 502, desc: '刷新令牌无效、过期、被吊销或与客户端 ID 不匹配（如 AADSTS70000），需要重新授权' },
   { code: 'ACCOUNT_ACTION_REQUIRED', status: 502, desc: '微软要求该账号交互登录（二次验证、安全检查）' },
   { code: 'CONSENT_REQUIRED', status: 502, desc: '应用未获得该账号的授权' },

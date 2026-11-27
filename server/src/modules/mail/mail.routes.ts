@@ -253,6 +253,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
+            oauthTenant: emailAccount.oauthTenant,
         };
 
         try {
@@ -328,6 +329,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 refreshToken: emailAccount.refreshToken!,
                 autoAssigned: false,
                 fetchStrategy: emailAccount.fetchStrategy,
+                oauthTenant: emailAccount.oauthTenant,
             };
 
             let result: Awaited<ReturnType<typeof mailService.getEmails>>;
@@ -412,6 +414,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
+            oauthTenant: emailAccount.oauthTenant,
         };
 
         try {
@@ -480,6 +483,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             refreshToken: emailAccount.refreshToken!,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
+            oauthTenant: emailAccount.oauthTenant,
         };
 
         try {
@@ -863,6 +867,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 refreshToken: emailAccount.refreshToken!,
                 autoAssigned: false,
                 fetchStrategy: emailAccount.fetchStrategy,
+                oauthTenant: emailAccount.oauthTenant,
             };
 
             let result: WaitCodeResult | null;

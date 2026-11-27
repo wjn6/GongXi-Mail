@@ -9,6 +9,9 @@ export const mailFetchStrategySchema = z.enum([
 
 export const sendStrategySchema = z.enum(['LEAST_USED', 'ROUND_ROBIN', 'RANDOM']);
 
+/** 换取令牌使用的微软登录端点：consumers（个人账号）/ organizations（工作或学校账号）/ common（两者） */
+export const oauthTenantSchema = z.enum(['CONSUMERS', 'ORGANIZATIONS', 'COMMON']);
+
 const sendSettingsSchema = {
     sendEnabled: z.boolean(),
     sendStrategy: sendStrategySchema,
@@ -21,6 +24,7 @@ export const createGroupSchema = z.object({
     name: z.string().min(1).max(50),
     description: z.string().max(255).optional(),
     fetchStrategy: mailFetchStrategySchema.default('GRAPH_FIRST'),
+    oauthTenant: oauthTenantSchema.default('CONSUMERS'),
     sendEnabled: sendSettingsSchema.sendEnabled.optional(),
     sendStrategy: sendSettingsSchema.sendStrategy.optional(),
     sendDailyLimit: sendSettingsSchema.sendDailyLimit.optional(),
@@ -32,6 +36,7 @@ export const updateGroupSchema = z.object({
     name: z.string().min(1).max(50).optional(),
     description: z.string().max(255).optional(),
     fetchStrategy: mailFetchStrategySchema.optional(),
+    oauthTenant: oauthTenantSchema.optional(),
     sendEnabled: sendSettingsSchema.sendEnabled.optional(),
     sendStrategy: sendSettingsSchema.sendStrategy.optional(),
     sendDailyLimit: sendSettingsSchema.sendDailyLimit.optional(),

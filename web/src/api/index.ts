@@ -574,11 +574,13 @@ export const emailApi = {
 
 type MailFetchStrategyValue = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY';
 export type SendStrategyValue = 'LEAST_USED' | 'ROUND_ROBIN' | 'RANDOM';
+export type OAuthTenantValue = 'CONSUMERS' | 'ORGANIZATIONS' | 'COMMON';
 
 interface GroupInput {
     name?: string;
     description?: string;
     fetchStrategy?: MailFetchStrategyValue;
+    oauthTenant?: OAuthTenantValue;
     sendEnabled?: boolean;
     sendStrategy?: SendStrategyValue;
     sendDailyLimit?: number;

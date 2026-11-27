@@ -119,6 +119,19 @@ npm run test
 
 说明：`IMAP_ONLY` 不支持“清空邮箱（process-mailbox）”，该操作依赖 Graph API。
 
+
+## 微软登录端点（分组级）
+
+收信（Graph / IMAP）、发信和 Token 刷新换取令牌时使用的端点，按分组设置，必须与客户端 ID 在微软注册时支持的账号类型一致：
+
+| 选项 | 端点 | 适用 |
+|------|------|------|
+| `CONSUMERS`（默认） | `/consumers` | 个人 Microsoft 账号（outlook.com、hotmail.com 等）；只支持个人账号的应用只能用它 |
+| `ORGANIZATIONS` | `/organizations` | 工作 / 学校账号（Entra ID） |
+| `COMMON` | `/common` | 两种都接受，应用需注册为同时支持两种账号 |
+
+端点选错时微软返回 `AADSTS9002331` 等错误，系统报 `OAUTH_ENDPOINT_MISMATCH`。未分组的邮箱按 `CONSUMERS` 处理。
+微软换取令牌时会轮换 refresh token，系统会自动保存新的；刷新令牌失效等账号层面的失败会把邮箱标记为异常，刷新成功后自动恢复正常。
 ## API 文档
 
 后台「API 文档」页面有完整的参数、响应和错误码说明，下面是摘要。代码位于 `server/src/modules/mail/mail.routes.ts`。
@@ -217,6 +230,7 @@ curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
 | `INVALID_REGEX` / `INVALID_SINCE` | 400 | 正则无效或被拒绝 / since 无法解析 |
 | `TOO_MANY_WAITS` | 429 | 同一 Key 等待中的请求超过 10 个 |
 | `NO_MESSAGES` / `NO_MATCH` | 404 | `mail_text` 没有邮件 / 正则没匹配 |
+| `OAUTH_ENDPOINT_MISMATCH` | 502 | 分组的微软登录端点与客户端 ID 支持的账号类型不一致（如 AADSTS9002331），在邮箱分组中修改 |
 | `REFRESH_TOKEN_INVALID` | 502 | 刷新令牌无效、过期、被吊销或与客户端 ID 不匹配（如 AADSTS70000），需要重新授权 |
 | `ACCOUNT_ACTION_REQUIRED` / `CONSENT_REQUIRED` | 502 | 微软要求交互登录（二次验证等） / 应用未获授权 |
 | `CLIENT_ID_INVALID` / `MS_ACCOUNT_UNAVAILABLE` | 502 | 客户端 ID 无效 / 微软账号不存在、被禁用或锁定 |

@@ -45,7 +45,7 @@ import {
     SendOutlined,
     SafetyCertificateOutlined,
 } from '@ant-design/icons';
-import { emailApi, groupApi, sendApi, type SendStrategyValue } from '../../api';
+import { emailApi, groupApi, sendApi, type OAuthTenantValue, type SendStrategyValue } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
@@ -72,6 +72,18 @@ const SEND_STRATEGY_OPTIONS: Array<{ value: SendStrategyValue; label: string }> 
     { value: 'ROUND_ROBIN', label: '轮流（最久没发信的优先）' },
     { value: 'RANDOM', label: '随机' },
 ];
+
+const OAUTH_TENANT_OPTIONS: Array<{ value: OAuthTenantValue; label: string }> = [
+    { value: 'CONSUMERS', label: '个人账号（/consumers，outlook.com / hotmail.com 等）' },
+    { value: 'ORGANIZATIONS', label: '工作或学校账号（/organizations）' },
+    { value: 'COMMON', label: '两种都支持（/common）' },
+];
+
+const OAUTH_TENANT_LABELS: Record<OAuthTenantValue, string> = {
+    CONSUMERS: '个人账号',
+    ORGANIZATIONS: '工作/学校',
+    COMMON: '通用',
+};
 
 const SEND_STRATEGY_LABELS: Record<SendStrategyValue, string> = {
     LEAST_USED: '最少使用',
@@ -135,6 +147,7 @@ interface EmailGroup {
     name: string;
     description: string | null;
     fetchStrategy: MailFetchStrategy;
+    oauthTenant?: OAuthTenantValue;
     sendEnabled: boolean;
     sendStrategy: SendStrategyValue;
     sendDailyLimit: number;
@@ -644,7 +657,7 @@ const EmailsPage: React.FC = () => {
     const handleCreateGroup = () => {
         setEditingGroupId(null);
         groupForm.resetFields();
-        groupForm.setFieldsValue({ fetchStrategy: 'GRAPH_FIRST', ...SEND_GROUP_DEFAULTS });
+        groupForm.setFieldsValue({ fetchStrategy: 'GRAPH_FIRST', oauthTenant: 'CONSUMERS', ...SEND_GROUP_DEFAULTS });
         setGroupModalVisible(true);
     };
 
@@ -654,6 +667,7 @@ const EmailsPage: React.FC = () => {
             name: group.name,
             description: group.description,
             fetchStrategy: group.fetchStrategy,
+            oauthTenant: group.oauthTenant ?? 'CONSUMERS',
             sendEnabled: group.sendEnabled ?? SEND_GROUP_DEFAULTS.sendEnabled,
             sendStrategy: group.sendStrategy ?? SEND_GROUP_DEFAULTS.sendStrategy,
             sendDailyLimit: group.sendDailyLimit ?? SEND_GROUP_DEFAULTS.sendDailyLimit,
@@ -1143,6 +1157,20 @@ const EmailsPage: React.FC = () => {
             render: (value: MailFetchStrategy) => <Tag color="purple">{MAIL_FETCH_STRATEGY_LABELS[value]}</Tag>,
         },
         {
+            title: '登录端点',
+            dataIndex: 'oauthTenant',
+            key: 'oauthTenant',
+            width: 120,
+            render: (value: OAuthTenantValue | undefined) => {
+                const tenant = value ?? 'CONSUMERS';
+                return (
+                    <Tooltip title={`/${tenant.toLowerCase()}`}>
+                        <Tag color={tenant === 'CONSUMERS' ? 'blue' : 'gold'}>{OAUTH_TENANT_LABELS[tenant]}</Tag>
+                    </Tooltip>
+                );
+            },
+        },
+        {
             title: '发信',
             dataIndex: 'sendEnabled',
             key: 'sendEnabled',
@@ -1627,6 +1655,14 @@ const EmailsPage: React.FC = () => {
                         rules={[{ required: true, message: '请选择拉取策略' }]}
                     >
                         <Select options={MAIL_FETCH_STRATEGY_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} />
+                    </Form.Item>
+                    <Form.Item
+                        name="oauthTenant"
+                        label="微软登录端点"
+                        rules={[{ required: true, message: '请选择登录端点' }]}
+                        extra="收信、发信和 Token 刷新换取令牌时使用。要与客户端 ID 在微软注册时支持的账号类型一致：只支持个人账号的应用只能用 /consumers，用 /common 会报 AADSTS9002331"
+                    >
+                        <Select options={OAUTH_TENANT_OPTIONS} />
                     </Form.Item>
 
                     <Divider titlePlacement="start" style={{ margin: '8px 0 16px' }}>发信设置</Divider>

@@ -67,6 +67,8 @@ model EmailGroup {
   name        String   @unique @db.VarChar(50)
   description String?  @db.VarChar(255)
   fetchStrategy MailFetchStrategy @default(GRAPH_FIRST) @map("fetch_strategy")
+  // 换取令牌使用的微软登录端点：取决于 client_id 在微软注册时支持的账号类型
+  oauthTenant   OAuthTenant       @default(CONSUMERS) @map("oauth_tenant")
   // 发信池配置（默认关闭）
   sendEnabled         Boolean      @default(false) @map("send_enabled")
   sendStrategy        SendStrategy @default(LEAST_USED) @map("send_strategy")
@@ -307,6 +309,12 @@ enum IdempotencyStatus {
 enum EmailUsageStatus {
   CLAIMED
   COMPLETED
+}
+
+enum OAuthTenant {
+  CONSUMERS
+  ORGANIZATIONS
+  COMMON
 }
 
 enum MailFetchStrategy {

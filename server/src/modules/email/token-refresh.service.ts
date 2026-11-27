@@ -1,10 +1,10 @@
 import prisma from '../../lib/prisma.js';
 import { encrypt, decrypt } from '../../lib/crypto.js';
 import { logger } from '../../lib/logger.js';
-import { proxyFetch } from '../../lib/proxy.js';
 import { env } from '../../config/env.js';
 import type { Prisma } from '@prisma/client';
-import { formatOAuthFailure, parseOAuthTokenError } from '../../lib/oauth-error.js';
+import { formatOAuthFailure, isAccountLevelOAuthFailure } from '../../lib/oauth-error.js';
+import { exchangeRefreshToken, normalizeOAuthTenant } from '../../lib/ms-oauth.js';
 
 export type TokenRefreshTrigger = 'AUTO' | 'MANUAL';
 
@@ -73,13 +73,6 @@ interface RefreshAllOptions {
     } | null;
 }
 
-interface OAuthTokenResponse {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-    error?: string;
-    error_description?: string;
-}
 
 const TOKEN_REFRESH_ERROR_PREFIX = 'Token refresh';
 const SYSTEM_CONFIG_ID = 1;
@@ -141,22 +134,25 @@ function formatTokenRefreshError(message: string): string {
     return `${TOKEN_REFRESH_ERROR_PREFIX}: ${message}`.substring(0, 500);
 }
 
-function getFailureUpdateData(existingErrorMessage: string | null, message: string) {
-    if (existingErrorMessage && !existingErrorMessage.startsWith(TOKEN_REFRESH_ERROR_PREFIX)) {
-        return {};
-    }
-
+function getFailureUpdateData(
+    account: { status: string; errorMessage: string | null },
+    message: string,
+    accountLevel: boolean
+): Prisma.EmailAccountUpdateInput {
+    // 刷新令牌本身失效（如 AADSTS70000）：标记为异常，邮箱池不再分配、发信池不再使用
+    // 网络等临时问题：只记录原因，不改变状态
     return {
         errorMessage: formatTokenRefreshError(message),
+        ...(accountLevel && account.status === 'ACTIVE' ? { status: 'ERROR' as const } : {}),
     };
 }
 
-function getSuccessUpdateData(existingErrorMessage: string | null) {
-    if (existingErrorMessage?.startsWith(TOKEN_REFRESH_ERROR_PREFIX)) {
-        return { errorMessage: null };
-    }
-
-    return {};
+function getSuccessUpdateData(account: { status: string; errorMessage: string | null }): Prisma.EmailAccountUpdateInput {
+    // 令牌可用：清除错误；之前因异常被标记的账号恢复正常（禁用的账号不会被刷新）
+    return {
+        errorMessage: null,
+        ...(account.status === 'ERROR' ? { status: 'ACTIVE' as const } : {}),
+    };
 }
 
 function mapSystemConfigToTokenRefreshConfig(config: SystemConfigSnapshot): TokenRefreshConfig {
@@ -329,6 +325,7 @@ export const tokenRefreshService = {
                 refreshToken: true,
                 status: true,
                 errorMessage: true,
+                group: { select: { oauthTenant: true } },
             },
         });
 
@@ -344,76 +341,59 @@ export const tokenRefreshService = {
         try {
             currentRefreshToken = decrypt(account.refreshToken);
         } catch {
+            const msg = 'Failed to decrypt refresh token (was ENCRYPTION_KEY changed?)';
             logger.error({ emailId, email: account.email }, '解密 refresh token 失败');
             await prisma.emailAccount.update({
                 where: { id: emailId },
-                data: getFailureUpdateData(account.errorMessage, 'Failed to decrypt refresh token'),
+                data: getFailureUpdateData(account, msg, true),
             });
-            return { emailId, email: account.email, success: false, message: 'Failed to decrypt refresh token' };
+            return { emailId, email: account.email, success: false, message: msg };
         }
 
-        try {
-            const response = await proxyFetch(
-                'https://login.microsoftonline.com/common/oauth2/v2.0/token',
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                        grant_type: 'refresh_token',
-                        refresh_token: currentRefreshToken,
-                        client_id: account.clientId,
-                    }).toString(),
-                }
-            );
+        const tenant = normalizeOAuthTenant(account.group?.oauthTenant);
+        const result = await exchangeRefreshToken({
+            clientId: account.clientId,
+            refreshToken: currentRefreshToken,
+            tenant,
+        });
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                // 去掉 Trace ID 等噪声，账号层面的问题（如 refresh token 失效）附带处理建议
-                const errorMsg = formatOAuthFailure(parseOAuthTokenError(response.status, errorText));
-
-                logger.warn({ email: account.email, emailId, status: response.status }, `Token 刷新失败: ${errorMsg}`);
-                await prisma.emailAccount.update({
-                    where: { id: emailId },
-                    data: getFailureUpdateData(account.errorMessage, errorMsg),
-                });
-                return { emailId, email: account.email, success: false, message: errorMsg.substring(0, 200) };
-            }
-
-            const data = await response.json() as OAuthTokenResponse;
-
-            if (!data.refresh_token) {
-                const msg = 'No refresh_token in response';
-                logger.warn({ email: account.email, emailId }, '响应中缺少 refresh_token');
-                await prisma.emailAccount.update({
-                    where: { id: emailId },
-                    data: getFailureUpdateData(account.errorMessage, msg),
-                });
-                return { emailId, email: account.email, success: false, message: msg };
-            }
-
-            const encryptedNewToken = encrypt(data.refresh_token);
+        if (!result.ok) {
+            const accountLevel = isAccountLevelOAuthFailure(result.failure);
+            // 去掉 Trace ID 等噪声，账号层面的问题（如 refresh token 失效）附带处理建议
+            const errorMsg = formatOAuthFailure(result.failure);
+            logger.warn({
+                email: account.email,
+                emailId,
+                tenant,
+                status: result.failure.status,
+                kind: result.failure.kind,
+                aadsts: result.failure.aadsts,
+            }, `Token 刷新失败: ${errorMsg}`);
             await prisma.emailAccount.update({
                 where: { id: emailId },
-                data: {
-                    refreshToken: encryptedNewToken,
-                    tokenRefreshedAt: new Date(),
-                    ...getSuccessUpdateData(account.errorMessage),
-                },
+                data: getFailureUpdateData(account, errorMsg, accountLevel),
             });
-
-            logger.info({ email: account.email, emailId }, 'Token 刷新成功');
-            return { emailId, email: account.email, success: true, message: 'OK' };
-        } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'Unknown error';
-            logger.error({ err, email: account.email, emailId }, 'Token 刷新异常');
-            await prisma.emailAccount.update({
-                where: { id: emailId },
-                data: getFailureUpdateData(account.errorMessage, `Exception: ${message}`),
-            });
-            return { emailId, email: account.email, success: false, message: message.substring(0, 200) };
+            return { emailId, email: account.email, success: false, message: errorMsg.substring(0, 300) };
         }
+
+        // 微软通常会返回新的 refresh token（轮换）；没有返回时旧令牌仍然有效，继续使用
+        const rotated = !!result.refreshToken && result.refreshToken !== currentRefreshToken;
+        await prisma.emailAccount.update({
+            where: { id: emailId },
+            data: {
+                ...(rotated ? { refreshToken: encrypt(result.refreshToken!) } : {}),
+                tokenRefreshedAt: new Date(),
+                ...getSuccessUpdateData(account),
+            },
+        });
+
+        logger.info({ email: account.email, emailId, tenant, rotated }, 'Token 刷新成功');
+        return {
+            emailId,
+            email: account.email,
+            success: true,
+            message: rotated ? 'OK' : 'OK (Microsoft did not rotate the refresh token; the current one is still valid)',
+        };
     },
 
     /**
@@ -582,3 +562,4 @@ export const tokenRefreshService = {
         }
     },
 };
+

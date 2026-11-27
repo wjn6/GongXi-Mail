@@ -59,6 +59,7 @@ interface PickedAccount {
     refreshToken: string;
     sendCapability: 'UNKNOWN' | 'ALLOWED' | 'DENIED';
     groupId: number | null;
+    oauthTenant: string | null;
 }
 
 interface PickOptions {
@@ -110,7 +111,8 @@ async function pickAndReserveSender(logId: string, options: PickOptions): Promis
 
         const rows = await tx.$queryRaw<PickedAccount[]>`
             SELECT a.id, a.email, a.client_id AS "clientId", a.refresh_token AS "refreshToken",
-                   a.send_capability::text AS "sendCapability", a.group_id AS "groupId"
+                   a.send_capability::text AS "sendCapability", a.group_id AS "groupId",
+                   g.oauth_tenant::text AS "oauthTenant"
             FROM email_accounts a
             JOIN email_groups g ON g.id = a.group_id
             WHERE ${Prisma.join(conditions, ' AND ')}
@@ -249,7 +251,7 @@ function isRetryableKind(kind: SendFailureKind): boolean {
  * 用指定账号尝试发出一次（获取令牌 → 检查 Mail.Send → 调用 Graph）。
  */
 async function attemptWithAccount(
-    account: Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'sendCapability'>,
+    account: Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'sendCapability' | 'oauthTenant'>,
     request: NormalizedSendRequest
 ): Promise<{ ok: true } | { ok: false; failure: SendFailure }> {
     let refreshToken: string;
@@ -270,6 +272,7 @@ async function attemptWithAccount(
         clientId: account.clientId,
         refreshToken,
         autoAssigned: false,
+        oauthTenant: account.oauthTenant,
     };
 
     const token = await mailService.getGraphSendToken(credentials as Parameters<typeof mailService.getGraphSendToken>[0]);
@@ -441,7 +444,10 @@ export async function resolvePreferredSender(address: string, scope: SendScope):
 export async function sendWithAccount(logId: string, accountId: number, request: NormalizedSendRequest): Promise<SendOutcome> {
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
-        select: { id: true, email: true, clientId: true, refreshToken: true, sendCapability: true, groupId: true },
+        select: {
+            id: true, email: true, clientId: true, refreshToken: true, sendCapability: true, groupId: true,
+            group: { select: { oauthTenant: true } },
+        },
     });
     if (!account) {
         await markLogFailed(logId, 'NOT_FOUND', 'Email account not found');
@@ -456,7 +462,7 @@ export async function sendWithAccount(logId: string, accountId: number, request:
         WHERE id = ${logId}::uuid
     `;
 
-    const result = await attemptWithAccount(account, request);
+    const result = await attemptWithAccount({ ...account, oauthTenant: account.group?.oauthTenant ?? null }, request);
     if (result.ok) {
         await markLogSent(logId);
         return { ok: true, logId, accountId: account.id, fromAddress: account.email, attempts: 1 };
@@ -474,7 +480,7 @@ export async function sendWithAccount(logId: string, accountId: number, request:
 export async function checkSendCapability(accountId: number): Promise<{ id: number; email: string; capability: 'ALLOWED' | 'DENIED' | 'UNKNOWN'; message: string }> {
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
-        select: { id: true, email: true, clientId: true, refreshToken: true },
+        select: { id: true, email: true, clientId: true, refreshToken: true, group: { select: { oauthTenant: true } } },
     });
     if (!account) {
         return { id: accountId, email: '', capability: 'UNKNOWN', message: 'Email account not found' };
@@ -488,7 +494,7 @@ export async function checkSendCapability(accountId: number): Promise<{ id: numb
     }
 
     const token = await mailService.getGraphSendToken(
-        { id: account.id, email: account.email, clientId: account.clientId, refreshToken, autoAssigned: false } as Parameters<typeof mailService.getGraphSendToken>[0],
+        { id: account.id, email: account.email, clientId: account.clientId, refreshToken, autoAssigned: false, oauthTenant: account.group?.oauthTenant } as Parameters<typeof mailService.getGraphSendToken>[0],
         { force: true }
     );
     if ('error' in token) {

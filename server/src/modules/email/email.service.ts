@@ -32,7 +32,7 @@ export const emailService = {
                     clientId: true,
                 status: true,
                 groupId: true,
-                group: { select: { id: true, name: true, fetchStrategy: true, sendEnabled: true } },
+                group: { select: { id: true, name: true, fetchStrategy: true, oauthTenant: true, sendEnabled: true } },
                 lastCheckAt: true,
                 tokenRefreshedAt: true,
                 errorMessage: true,
@@ -67,7 +67,7 @@ export const emailService = {
                 refreshToken: !!includeSecrets,
                 status: true,
                 groupId: true,
-                group: { select: { id: true, name: true, fetchStrategy: true } },
+                group: { select: { id: true, name: true, fetchStrategy: true, oauthTenant: true } },
                 lastCheckAt: true,
                 tokenRefreshedAt: true,
                 errorMessage: true,
@@ -109,6 +109,7 @@ export const emailService = {
                 group: {
                     select: {
                         fetchStrategy: true,
+                        oauthTenant: true,
                     },
                 },
             },
@@ -124,6 +125,7 @@ export const emailService = {
             refreshToken: decrypt(email.refreshToken),
             password: email.password ? decrypt(email.password) : undefined,
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
+            oauthTenant: email.group?.oauthTenant || 'CONSUMERS',
         };
     },
 

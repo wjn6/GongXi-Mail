@@ -7,6 +7,7 @@
  */
 
 export type OAuthFailureKind =
+    | 'TENANT_MISMATCH'
     | 'TOKEN_INVALID'
     | 'INTERACTION_REQUIRED'
     | 'CONSENT_REQUIRED'
@@ -31,10 +32,13 @@ const TOKEN_INVALID_CODES = new Set(['70000', '70008', '700082', '700084', '5017
 const INTERACTION_CODES = new Set(['50076', '50079', '50158', '53003']);
 const CONSENT_CODES = new Set(['65001', '65004']);
 const CLIENT_CODES = new Set(['700016', '7000218']);
+/** 登录端点与应用支持的账号类型不一致（如只支持个人账号的应用请求了 /common） */
+const TENANT_MISMATCH_CODES = new Set(['9002331', '50194', '9002346', '500207']);
 const ACCOUNT_CODES = new Set(['50034', '50053', '50057']);
 
 /** 账号层面的失败 → 对外错误码 */
 export const ACCOUNT_LEVEL_ERROR_CODES: Record<Exclude<OAuthFailureKind, 'NETWORK' | 'UNKNOWN'>, string> = {
+    TENANT_MISMATCH: 'OAUTH_ENDPOINT_MISMATCH',
     TOKEN_INVALID: 'REFRESH_TOKEN_INVALID',
     INTERACTION_REQUIRED: 'ACCOUNT_ACTION_REQUIRED',
     CONSENT_REQUIRED: 'CONSENT_REQUIRED',
@@ -43,6 +47,7 @@ export const ACCOUNT_LEVEL_ERROR_CODES: Record<Exclude<OAuthFailureKind, 'NETWOR
 };
 
 const ACCOUNT_LEVEL_HINTS: Record<keyof typeof ACCOUNT_LEVEL_ERROR_CODES, string> = {
+    TENANT_MISMATCH: "The group's Microsoft login endpoint does not match the account types this client ID supports; change the group's login endpoint (personal-account apps must use /consumers)",
     TOKEN_INVALID: 'Refresh token is invalid, expired, revoked or does not match the client ID; re-authorize this account and update its refresh token',
     INTERACTION_REQUIRED: 'Microsoft requires an interactive sign-in for this account (MFA or security check)',
     CONSENT_REQUIRED: 'The app has not been granted the required permissions for this account; re-authorize it',
@@ -60,6 +65,11 @@ function isAccountLevelKind(kind: OAuthFailureKind): kind is keyof typeof ACCOUN
     return kind !== 'NETWORK' && kind !== 'UNKNOWN';
 }
 
+/** 是否为账号层面的失败（令牌失效、需要交互登录、未授权、客户端 ID 不对、账号不可用） */
+export function isAccountLevelOAuthFailure(failure: OAuthFailure): boolean {
+    return isAccountLevelKind(failure.kind);
+}
+
 function cleanDescription(text: string): string {
     return text
         .replace(/\s*Trace ID:[\s\S]*$/i, '')
@@ -72,6 +82,7 @@ function cleanDescription(text: string): string {
 
 function classify(error: string, aadstsNumber: string | null): OAuthFailureKind {
     if (aadstsNumber) {
+        if (TENANT_MISMATCH_CODES.has(aadstsNumber)) return 'TENANT_MISMATCH';
         if (INTERACTION_CODES.has(aadstsNumber)) return 'INTERACTION_REQUIRED';
         if (CONSENT_CODES.has(aadstsNumber)) return 'CONSENT_REQUIRED';
         if (CLIENT_CODES.has(aadstsNumber)) return 'CLIENT_INVALID';

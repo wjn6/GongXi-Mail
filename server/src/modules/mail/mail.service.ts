@@ -3,14 +3,13 @@ import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
 import { setCache, getCache, deleteCache } from '../../lib/redis.js';
 import { hasMailSendScope } from '../../lib/send-mail.js';
+import { encrypt } from '../../lib/crypto.js';
+import { exchangeRefreshToken, normalizeOAuthTenant } from '../../lib/ms-oauth.js';
 import {
     combineFetchFailures,
     fetchFailureFromError,
     formatOAuthFailure,
-    networkOAuthFailure,
-    parseOAuthTokenError,
     tokenFailureToFetchFailure,
-    unknownOAuthFailure,
     type FetchFailure,
     type FetchMethod,
     type OAuthFailure,
@@ -35,6 +34,27 @@ interface Credentials {
     refreshToken: string;
     autoAssigned: boolean;
     fetchStrategy?: MailFetchStrategy;
+    /** 分组的微软登录端点，未设置时为 CONSUMERS */
+    oauthTenant?: string | null;
+}
+
+/**
+ * 微软换取访问令牌时会轮换 refresh token：保存新的，避免旧令牌过期后整个账号失效。
+ * 失败只记日志，不影响本次收信 / 发信。
+ */
+async function persistRotatedRefreshToken(credentials: Credentials, newToken: string | null) {
+    if (!newToken || newToken === credentials.refreshToken || !credentials.id) {
+        return;
+    }
+    try {
+        await prisma.emailAccount.update({
+            where: { id: credentials.id },
+            data: { refreshToken: encrypt(newToken), tokenRefreshedAt: new Date() },
+        });
+        credentials.refreshToken = newToken;
+    } catch (err) {
+        logger.warn({ err, email: credentials.email }, 'Failed to persist rotated refresh token');
+    }
 }
 
 interface EmailMessage {
@@ -46,11 +66,6 @@ interface EmailMessage {
     date: string;
 }
 
-interface OAuthTokenResponse {
-    access_token?: string;
-    expires_in?: number;
-    scope?: string;
-}
 
 interface GraphMessage {
     id?: string;
@@ -141,56 +156,29 @@ export const mailService = {
             return { ok: true, accessToken: cachedToken, hasMailRead: true };
         }
 
-        try {
-            const response = await proxyFetch(
-                'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                        client_id: credentials.clientId,
-                        grant_type: 'refresh_token',
-                        refresh_token: credentials.refreshToken,
-                        scope: 'https://graph.microsoft.com/.default',
-                    }).toString(),
-                },
-                proxyConfig
-            );
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                const failure = parseOAuthTokenError(response.status, errorText);
-                logger.error({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts, error: errorText }, 'Graph API token request failed');
-                return { ok: false, failure };
-            }
-
-            const data = await response.json() as OAuthTokenResponse;
-
-            // 检查是否有邮件读取权限
-            const scopeText = typeof data.scope === 'string' ? data.scope : '';
-            const hasMailRead = scopeText.includes('https://graph.microsoft.com/Mail.Read');
-            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
-
-            if (!accessToken) {
-                logger.warn({ email: credentials.email }, 'Graph API token missing access_token');
-                return { ok: false, failure: unknownOAuthFailure('Token response missing access_token') };
-            }
-
-            if (hasMailRead) {
-                // 只有有 Mail.Read 权限时才缓存
-                const expireTime = ((typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60);
-                await setCache(cacheKey, accessToken, expireTime);
-            } else {
-                logger.warn({ email: credentials.email }, 'No Mail.Read scope in token, will fallback to IMAP');
-            }
-
-            return { ok: true, accessToken, hasMailRead };
-        } catch (err) {
-            logger.error({ err, email: credentials.email }, 'Failed to get Graph API token');
-            return { ok: false, failure: networkOAuthFailure(getErrorMessage(err)) };
+        const result = await exchangeRefreshToken({
+            clientId: credentials.clientId,
+            refreshToken: credentials.refreshToken,
+            tenant: credentials.oauthTenant,
+            scope: 'https://graph.microsoft.com/.default',
+            proxyConfig,
+        });
+        if (!result.ok) {
+            logger.error({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts, error: result.failure.description }, 'Graph API token request failed');
+            return result;
         }
+        await persistRotatedRefreshToken(credentials, result.refreshToken);
+
+        // 检查是否有邮件读取权限
+        const hasMailRead = result.scope.includes('https://graph.microsoft.com/Mail.Read');
+        if (hasMailRead) {
+            // 只有有 Mail.Read 权限时才缓存
+            await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+        } else {
+            logger.warn({ email: credentials.email }, 'No Mail.Read scope in token, will fallback to IMAP');
+        }
+
+        return { ok: true, accessToken: result.accessToken, hasMailRead };
     },
 
     /**
@@ -209,45 +197,24 @@ export const mailService = {
             }
         }
 
-        try {
-            const response = await proxyFetch(
-                'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({
-                        client_id: credentials.clientId,
-                        grant_type: 'refresh_token',
-                        refresh_token: credentials.refreshToken,
-                        scope: 'https://graph.microsoft.com/.default',
-                    }).toString(),
-                },
-                options.proxyConfig
-            );
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                const failure = parseOAuthTokenError(response.status, errorText);
-                logger.warn({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts }, 'Graph send token request failed');
-                return { error: formatOAuthFailure(failure).slice(0, 400) };
-            }
-
-            const data = await response.json() as OAuthTokenResponse;
-            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
-            if (!accessToken) {
-                return { error: 'Token response missing access_token' };
-            }
-            const scope = typeof data.scope === 'string' ? data.scope : '';
-            const hasMailSend = hasMailSendScope(scope);
-            if (hasMailSend) {
-                const expireTime = (typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60;
-                await setCache(cacheKey, accessToken, Math.max(expireTime, 60));
-            }
-            return { accessToken, hasMailSend, scope };
-        } catch (err) {
-            logger.error({ err, email: credentials.email }, 'Failed to get Graph send token');
-            return { error: getErrorMessage(err).slice(0, 300) };
+        const result = await exchangeRefreshToken({
+            clientId: credentials.clientId,
+            refreshToken: credentials.refreshToken,
+            tenant: credentials.oauthTenant,
+            scope: 'https://graph.microsoft.com/.default',
+            proxyConfig: options.proxyConfig,
+        });
+        if (!result.ok) {
+            logger.warn({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts }, 'Graph send token request failed');
+            return { error: formatOAuthFailure(result.failure).slice(0, 400) };
         }
+        await persistRotatedRefreshToken(credentials, result.refreshToken);
+
+        const hasMailSend = hasMailSendScope(result.scope);
+        if (hasMailSend) {
+            await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+        }
+        return { accessToken: result.accessToken, hasMailSend, scope: result.scope };
     },
 
     async clearGraphSendToken(email: string) {
@@ -354,46 +321,21 @@ export const mailService = {
             return { ok: true, accessToken: cachedToken };
         }
 
-        try {
-            const response = await proxyFetch(
-                'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                        client_id: credentials.clientId,
-                        grant_type: 'refresh_token',
-                        refresh_token: credentials.refreshToken,
-                        // 注意：IMAP 不需要 scope
-                    }).toString(),
-                },
-                proxyConfig
-            );
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                const failure = parseOAuthTokenError(response.status, errorText);
-                logger.error({ email: credentials.email, status: response.status, kind: failure.kind, aadsts: failure.aadsts, error: errorText }, 'IMAP token request failed');
-                return { ok: false, failure };
-            }
-
-            const data = await response.json() as OAuthTokenResponse;
-            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
-            if (!accessToken) {
-                logger.warn({ email: credentials.email }, 'IMAP token missing access_token');
-                return { ok: false, failure: unknownOAuthFailure('Token response missing access_token') };
-            }
-
-            const expireTime = ((typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60);
-            await setCache(cacheKey, accessToken, expireTime);
-
-            return { ok: true, accessToken };
-        } catch (err) {
-            logger.error({ err, email: credentials.email }, 'Failed to get IMAP token');
-            return { ok: false, failure: networkOAuthFailure(getErrorMessage(err)) };
+        // 注意：IMAP 不需要 scope，按授权时的权限签发
+        const result = await exchangeRefreshToken({
+            clientId: credentials.clientId,
+            refreshToken: credentials.refreshToken,
+            tenant: credentials.oauthTenant,
+            proxyConfig,
+        });
+        if (!result.ok) {
+            logger.error({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts, error: result.failure.description }, 'IMAP token request failed');
+            return result;
         }
+        await persistRotatedRefreshToken(credentials, result.refreshToken);
+
+        await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+        return { ok: true, accessToken: result.accessToken };
     },
 
     /**
@@ -760,3 +702,4 @@ export const mailService = {
         }
     },
 };
+

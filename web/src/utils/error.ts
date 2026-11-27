@@ -1,5 +1,6 @@
 /** 账号层面的错误：在原文前加上中文处理建议 */
 const ERROR_CODE_HINTS: Record<string, string> = {
+    OAUTH_ENDPOINT_MISMATCH: '分组的「微软登录端点」与客户端 ID 支持的账号类型不一致，请在邮箱分组中修改（只支持个人账号的应用要选 /consumers）',
     REFRESH_TOKEN_INVALID: '刷新令牌已失效（过期、被吊销或与客户端 ID 不匹配），请重新授权该邮箱并更新刷新令牌',
     ACCOUNT_ACTION_REQUIRED: '微软要求该账号先登录完成验证（如二次验证、安全检查）',
     CONSENT_REQUIRED: '应用未获得该账号的授权，请重新授权',
