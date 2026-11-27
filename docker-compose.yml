@@ -29,7 +29,8 @@ services:
       - app_logs:/app/server/logs
       - app_data:/app/server/data
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      # 用 127.0.0.1：容器内 localhost 会先解析为 ::1，而服务只监听 IPv4
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
