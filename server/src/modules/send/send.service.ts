@@ -83,6 +83,9 @@ interface PickedAccount {
     email: string;
     clientId: string;
     refreshToken: string;
+    /** 独立 IMAP / SMTP 凭据（加密），可为空 */
+    imapClientId: string | null;
+    imapRefreshToken: string | null;
     sendCapability: CapabilityValue;
     smtpCapability: CapabilityValue;
     groupId: number | null;
@@ -139,6 +142,7 @@ async function pickAndReserveSender(logId: string, options: PickOptions): Promis
 
         const rows = await tx.$queryRaw<PickedAccount[]>`
             SELECT a.id, a.email, a.client_id AS "clientId", a.refresh_token AS "refreshToken",
+                   a.imap_client_id AS "imapClientId", a.imap_refresh_token AS "imapRefreshToken",
                    a.send_capability::text AS "sendCapability", a.smtp_capability::text AS "smtpCapability",
                    a.group_id AS "groupId",
                    g.oauth_tenant::text AS "oauthTenant", g.send_transport::text AS "sendTransport"
@@ -280,7 +284,7 @@ function isRetryableKind(kind: SendFailureKind): boolean {
     return kind === 'THROTTLED' || kind === 'BLOCKED' || kind === 'TRANSIENT' || kind === 'AUTH';
 }
 
-type AttemptAccount = Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'sendCapability' | 'smtpCapability' | 'oauthTenant' | 'sendTransport'>;
+type AttemptAccount = Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'imapClientId' | 'imapRefreshToken' | 'sendCapability' | 'smtpCapability' | 'oauthTenant' | 'sendTransport'>;
 type SendCredentials = Parameters<typeof mailService.getGraphSendToken>[0];
 type ChannelResult = { ok: true } | { ok: false; failure: SendFailure };
 
@@ -361,8 +365,10 @@ async function attemptWithAccount(
     request: NormalizedSendRequest
 ): Promise<{ ok: true; transport: SendTransportUsed } | { ok: false; failure: SendFailure; transport: SendChannel | null }> {
     let refreshToken: string;
+    let imapRefreshToken: string | null;
     try {
         refreshToken = decrypt(account.refreshToken);
+        imapRefreshToken = account.imapRefreshToken ? decrypt(account.imapRefreshToken) : null;
     } catch {
         const failure: SendFailure = tokenFailure('DECRYPT_FAILED', 'Failed to decrypt refresh token');
         await applyFailureToAccount(account.id, failure, null);
@@ -374,6 +380,8 @@ async function attemptWithAccount(
         email: account.email,
         clientId: account.clientId,
         refreshToken,
+        imapClientId: account.imapClientId,
+        imapRefreshToken,
         autoAssigned: false,
         oauthTenant: account.oauthTenant,
     } as SendCredentials;
@@ -549,7 +557,8 @@ export async function sendWithAccount(logId: string, accountId: number, request:
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
         select: {
-            id: true, email: true, clientId: true, refreshToken: true, sendCapability: true, smtpCapability: true, groupId: true,
+            id: true, email: true, clientId: true, refreshToken: true, imapClientId: true, imapRefreshToken: true,
+            sendCapability: true, smtpCapability: true, groupId: true,
             group: { select: { oauthTenant: true, sendTransport: true } },
         },
     });
@@ -600,22 +609,28 @@ export interface SendCheckResult {
 export async function checkSendCapability(accountId: number): Promise<SendCheckResult> {
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
-        select: { id: true, email: true, clientId: true, refreshToken: true, group: { select: { oauthTenant: true, sendTransport: true } } },
+        select: {
+            id: true, email: true, clientId: true, refreshToken: true, imapClientId: true, imapRefreshToken: true,
+            group: { select: { oauthTenant: true, sendTransport: true } },
+        },
     });
     if (!account) {
         return { id: accountId, email: '', capability: 'UNKNOWN', graph: 'UNKNOWN', smtp: 'UNKNOWN', message: 'Email account not found' };
     }
 
     let refreshToken: string;
+    let imapRefreshToken: string | null;
     try {
         refreshToken = decrypt(account.refreshToken);
+        imapRefreshToken = account.imapRefreshToken ? decrypt(account.imapRefreshToken) : null;
     } catch {
         return { id: account.id, email: account.email, capability: 'UNKNOWN', graph: 'UNKNOWN', smtp: 'UNKNOWN', message: 'Failed to decrypt refresh token' };
     }
 
     const oauthTenant = account.group?.oauthTenant ?? null;
     const credentials = {
-        id: account.id, email: account.email, clientId: account.clientId, refreshToken, autoAssigned: false, oauthTenant,
+        id: account.id, email: account.email, clientId: account.clientId, refreshToken,
+        imapClientId: account.imapClientId, imapRefreshToken, autoAssigned: false, oauthTenant,
     } as SendCredentials;
     const notes: string[] = [];
 

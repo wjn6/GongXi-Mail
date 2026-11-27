@@ -95,6 +95,10 @@ model EmailAccount {
   clientId     String      @map("client_id") @db.VarChar(100)
   password     String?     @db.VarChar(255)
   refreshToken String      @map("refresh_token") @db.Text
+  // 单独用于 IMAP / SMTP（outlook.office.com）的凭据（加密）：Graph 与 IMAP 由两个应用分别授权的账号各有一份 refresh token；
+  // 为空时 IMAP / SMTP 也使用上面的主凭据
+  imapClientId     String? @map("imap_client_id") @db.VarChar(100)
+  imapRefreshToken String? @map("imap_refresh_token") @db.Text
   status       EmailStatus @default(ACTIVE)
   groupId      Int?        @map("group_id")
   lastCheckAt  DateTime?   @map("last_check_at")

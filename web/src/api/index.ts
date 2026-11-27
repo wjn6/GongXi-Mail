@@ -465,6 +465,29 @@ export const apiKeyApi = {
 // 邮箱账户 API
 // ========================================
 
+/** 独立 IMAP 凭据：Graph 与 IMAP 由两个应用分别授权的账号使用；两项都为空表示 IMAP 也用主凭据 */
+interface ImapCredentialInput {
+    imapClientId?: string | null;
+    imapRefreshToken?: string | null;
+}
+
+interface EmailCreateInput extends ImapCredentialInput {
+    email: string;
+    clientId: string;
+    refreshToken: string;
+    password?: string;
+    groupId?: number;
+}
+
+interface EmailUpdateInput extends ImapCredentialInput {
+    email?: string;
+    clientId?: string;
+    refreshToken?: string;
+    password?: string;
+    status?: string;
+    groupId?: number | null;
+}
+
 export const emailApi = {
     getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string; groupId?: number }) =>
         requestGet<ApiPagedList<T>>('/admin/emails', { params, cacheMs: 800 }),
@@ -472,8 +495,8 @@ export const emailApi = {
     getById: <T = Record<string, unknown>>(id: number, includeSecrets?: boolean) =>
         requestGet<T>(`/admin/emails/${id}`, { params: { secrets: includeSecrets } }),
 
-    create: (data: { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }) =>
-        requestPost<Record<string, unknown>, { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }>(
+    create: (data: EmailCreateInput) =>
+        requestPost<Record<string, unknown>, EmailCreateInput>(
             '/admin/emails',
             data,
             {
@@ -495,8 +518,8 @@ export const emailApi = {
             params: { ids: ids?.join(','), separator, groupId },
         }),
 
-    update: (id: number, data: { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }) =>
-        requestPut<Record<string, unknown>, { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }>(
+    update: (id: number, data: EmailUpdateInput) =>
+        requestPut<Record<string, unknown>, EmailUpdateInput>(
             `/admin/emails/${id}`,
             data,
             {

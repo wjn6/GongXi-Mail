@@ -1,3 +1,4 @@
+import { formatExportLine, parseImportLine } from '../../lib/account-import.js';
 import prisma from '../../lib/prisma.js';
 import { encrypt, decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
@@ -30,6 +31,7 @@ export const emailService = {
                     id: true,
                     email: true,
                     clientId: true,
+                    imapClientId: true,
                 status: true,
                 groupId: true,
                 group: { select: { id: true, name: true, fetchStrategy: true, oauthTenant: true, sendEnabled: true, sendTransport: true } },
@@ -66,6 +68,8 @@ export const emailService = {
                 clientId: true,
                 password: !!includeSecrets,
                 refreshToken: !!includeSecrets,
+                imapClientId: true,
+                imapRefreshToken: !!includeSecrets,
                 status: true,
                 groupId: true,
                 group: { select: { id: true, name: true, fetchStrategy: true, oauthTenant: true } },
@@ -87,6 +91,7 @@ export const emailService = {
                 ...email,
                 refreshToken: email.refreshToken ? decrypt(email.refreshToken) : email.refreshToken,
                 password: email.password ? decrypt(email.password) : email.password,
+                imapRefreshToken: email.imapRefreshToken ? decrypt(email.imapRefreshToken) : email.imapRefreshToken,
             };
         }
 
@@ -105,6 +110,8 @@ export const emailService = {
                 clientId: true,
                 refreshToken: true,
                 password: true,
+                imapClientId: true,
+                imapRefreshToken: true,
                 status: true,
                 groupId: true,
                 group: {
@@ -125,6 +132,7 @@ export const emailService = {
             ...email,
             refreshToken: decrypt(email.refreshToken),
             password: email.password ? decrypt(email.password) : undefined,
+            imapRefreshToken: email.imapRefreshToken ? decrypt(email.imapRefreshToken) : null,
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
             oauthTenant: email.group?.oauthTenant || 'CONSUMERS',
         };
@@ -134,7 +142,7 @@ export const emailService = {
      * 创建邮箱账户
      */
     async create(input: CreateEmailInput) {
-        const { email, clientId, refreshToken, password, groupId } = input;
+        const { email, clientId, refreshToken, password, groupId, imapClientId, imapRefreshToken } = input;
 
         const exists = await prisma.emailAccount.findUnique({ where: { email } });
         if (exists) {
@@ -151,6 +159,8 @@ export const emailService = {
                 refreshToken: encryptedToken,
                 password: encryptedPassword,
                 groupId: groupId || null,
+                imapClientId: imapClientId && imapRefreshToken ? imapClientId : null,
+                imapRefreshToken: imapClientId && imapRefreshToken ? encrypt(imapRefreshToken) : null,
             },
             select: {
                 id: true,
@@ -174,8 +184,15 @@ export const emailService = {
             throw new AppError('NOT_FOUND', 'Email account not found', 404);
         }
 
-        const { refreshToken, password, ...rest } = input;
+        const { refreshToken, password, imapClientId, imapRefreshToken, ...rest } = input;
         const updateData: Prisma.EmailAccountUpdateInput = { ...rest };
+
+        // 独立 IMAP 凭据：两项同时传入；都为空表示删除，改用主凭据
+        if (imapClientId !== undefined || imapRefreshToken !== undefined) {
+            const keep = !!imapClientId && !!imapRefreshToken;
+            updateData.imapClientId = keep ? imapClientId : null;
+            updateData.imapRefreshToken = keep ? encrypt(imapRefreshToken!) : null;
+        }
 
         // 加密 sensitive data
         if (refreshToken) {
@@ -269,44 +286,17 @@ export const emailService = {
 
         for (const line of lines) {
             try {
-                const parts = line.trim().split(separator);
-                if (parts.length < 3) {
-                    throw new Error('Invalid format');
-                }
-
-                let email, clientId, refreshToken, password;
-
-                // 尝试猜测格式
-                // 1. email----password----clientId----refreshToken (4列)
-                // 2. email----clientId----refreshToken (3列)
-                // 3. email----clientId----uuid----info----refreshToken (5列)
-
-                if (parts.length >= 5) {
-                    // email----clientId----uuid----info----refreshToken
-                    email = parts[0];
-                    clientId = parts[1];
-                    refreshToken = parts[4];
-                    // 这种格式通常没有密码，或者密码隐藏在 info 里？暂且不处理密码
-                } else if (parts.length === 4) {
-                    // email----password----clientId----refreshToken
-                    email = parts[0];
-                    password = parts[1];
-                    clientId = parts[2];
-                    refreshToken = parts[3];
-                } else {
-                    // email----clientId----refreshToken
-                    email = parts[0];
-                    clientId = parts[1];
-                    refreshToken = parts[2];
-                }
-
-                if (!email || !clientId || !refreshToken) {
-                    throw new Error('Missing required fields');
-                }
+                const { email, password, clientId, refreshToken, imapClientId, imapRefreshToken } = parseImportLine(line, separator);
+                // 导入的一行即完整凭据：没有独立 IMAP 凭据时清除旧的
+                const imapData = {
+                    imapClientId: imapClientId ?? null,
+                    imapRefreshToken: imapRefreshToken ? encrypt(imapRefreshToken) : null,
+                };
 
                 const data: Prisma.EmailAccountUncheckedUpdateInput = {
                     clientId,
                     refreshToken: encrypt(refreshToken),
+                    ...imapData,
                     status: 'ACTIVE',
                 };
                 if (password) data.password = encrypt(password);
@@ -326,6 +316,7 @@ export const emailService = {
                         email,
                         clientId,
                         refreshToken: encrypt(refreshToken),
+                        ...imapData,
                         status: 'ACTIVE',
                     };
                     if (password) {
@@ -364,15 +355,23 @@ export const emailService = {
             where,
             select: {
                 email: true,
+                password: true,
                 clientId: true,
                 refreshToken: true,
+                imapClientId: true,
+                imapRefreshToken: true,
             },
         });
 
-        const lines = accounts.map((acc: { email: string; clientId: string; refreshToken: string }) => {
-            const token = decrypt(acc.refreshToken);
-            return `${acc.email}${separator}${acc.clientId}${separator}${token}`;
-        });
+        // 有独立 IMAP 凭据的账号导出 6 列（含密码），其它保持 3 列；两种都能直接重新导入
+        const lines = accounts.map((acc) => formatExportLine({
+            email: acc.email,
+            password: acc.imapRefreshToken && acc.password ? decrypt(acc.password) : null,
+            clientId: acc.clientId,
+            refreshToken: decrypt(acc.refreshToken),
+            imapClientId: acc.imapClientId,
+            imapRefreshToken: acc.imapRefreshToken ? decrypt(acc.imapRefreshToken) : null,
+        }, separator));
 
         return lines.join('\n');
     },

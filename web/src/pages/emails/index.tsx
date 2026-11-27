@@ -26,6 +26,7 @@ import {
     Switch,
     InputNumber,
     Divider,
+    Collapse,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -187,6 +188,7 @@ interface EmailAccount {
     lastCheckAt: string | null;
     tokenRefreshedAt: string | null;
     errorMessage: string | null;
+    imapClientId?: string | null;
     sendCapability?: SendCapability;
     smtpCapability?: SendCapability;
     sendCheckedAt?: string | null;
@@ -226,6 +228,7 @@ const renderEmailStatusTag = (record: Pick<EmailAccount, 'status' | 'errorMessag
 
 interface EmailDetailsResult extends EmailAccount {
     refreshToken: string;
+    imapRefreshToken?: string | null;
 }
 
 const EmailsPage: React.FC = () => {
@@ -362,6 +365,8 @@ const EmailsPage: React.FC = () => {
                     email: details.email,
                     clientId: details.clientId,
                     refreshToken: details.refreshToken,
+                    imapClientId: details.imapClientId ?? '',
+                    imapRefreshToken: details.imapRefreshToken ?? '',
                     status: details.status,
                     groupId: details.groupId,
                 });
@@ -414,6 +419,12 @@ const EmailsPage: React.FC = () => {
             const values = await form.validateFields();
             const normalizedGroupId =
                 values.groupId === null ? null : toOptionalNumber(values.groupId);
+
+            // 独立 IMAP 凭据：两项都留空表示 IMAP 也使用主凭据
+            const imapClientId = typeof values.imapClientId === 'string' ? values.imapClientId.trim() : '';
+            const imapRefreshToken = typeof values.imapRefreshToken === 'string' ? values.imapRefreshToken.trim() : '';
+            values.imapClientId = imapClientId || null;
+            values.imapRefreshToken = imapRefreshToken || null;
 
             if (editingId) {
                 const submitData = {
@@ -1414,6 +1425,48 @@ const EmailsPage: React.FC = () => {
                     >
                         <TextArea rows={4} placeholder="OAuth2 Refresh Token" />
                     </Form.Item>
+                    <Collapse
+                        size="small"
+                        ghost
+                        style={{ marginBottom: 16 }}
+                        defaultActiveKey={form.getFieldValue('imapClientId') ? ['imap'] : undefined}
+                        items={[{
+                            key: 'imap',
+                            label: '独立 IMAP 凭据（可选）',
+                            forceRender: true,
+                            children: (
+                                <>
+                                    <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+                                        Graph 和 IMAP 由两个不同应用授权、各有一个刷新令牌时填写（导入格式第 5、6 列）。IMAP 收信和 SMTP 发信优先使用这里的凭据；留空则都使用上面的客户端 ID 和刷新令牌。
+                                    </Text>
+                                    <Form.Item
+                                        name="imapClientId"
+                                        label="IMAP 客户端 ID"
+                                        dependencies={['imapRefreshToken']}
+                                        rules={[({ getFieldValue }) => ({
+                                            validator: (_, value) => (!value?.trim() && getFieldValue('imapRefreshToken')?.trim()
+                                                ? Promise.reject(new Error('填写了 IMAP 刷新令牌时必须填写 IMAP 客户端 ID'))
+                                                : Promise.resolve()),
+                                        })]}
+                                    >
+                                        <Input placeholder="例如 9e5f94bc-e8a4-4e73-b8be-63364c29d753" allowClear />
+                                    </Form.Item>
+                                    <Form.Item
+                                        name="imapRefreshToken"
+                                        label="IMAP 刷新令牌"
+                                        dependencies={['imapClientId']}
+                                        rules={[({ getFieldValue }) => ({
+                                            validator: (_, value) => (!value?.trim() && getFieldValue('imapClientId')?.trim()
+                                                ? Promise.reject(new Error('填写了 IMAP 客户端 ID 时必须填写 IMAP 刷新令牌'))
+                                                : Promise.resolve()),
+                                        })]}
+                                    >
+                                        <TextArea rows={3} placeholder="IMAP 应用的 Refresh Token" />
+                                    </Form.Item>
+                                </>
+                            ),
+                        }]}
+                    />
                     <Form.Item name="groupId" label="所属分组">
                         <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
                     </Form.Item>
@@ -1450,6 +1503,10 @@ const EmailsPage: React.FC = () => {
                             上传文件或粘贴内容。支持多种格式，将尝试自动解析。
                             <br />
                             推荐格式：邮箱{separator}密码{separator}客户端ID{separator}刷新令牌
+                            <br />
+                            Graph 与 IMAP 分开授权：邮箱{separator}密码{separator}客户端ID{separator}Graph刷新令牌{separator}IMAP客户端ID{separator}IMAP刷新令牌
+                            <br />
+                            也支持：邮箱{separator}客户端ID{separator}刷新令牌、邮箱{separator}客户端ID{separator}uuid{separator}info{separator}刷新令牌
                         </Text>
                     </div>
                     <Input
@@ -1473,15 +1530,8 @@ const EmailsPage: React.FC = () => {
                                 const fileContent = e.target?.result as string;
                                 if (fileContent) {
                                     const lines = fileContent.split(/\r?\n/).filter((line: string) => line.trim());
-                                    const processedLines = lines.map((line: string) => {
-                                        const parts = line.split(separator);
-                                        if (parts.length >= 5) {
-                                            return `${parts[0]}${separator}${parts[1]}${separator}${parts[4]}`;
-                                        }
-                                        return line;
-                                    });
-
-                                    setImportContent(processedLines.join('\n'));
+                                    // 原样交给服务端解析（6 列 Graph + IMAP 格式不能在这里截断）
+                                    setImportContent(lines.join('\n'));
                                     message.success(`文件读取成功，已解析 ${lines.length} 行数据`);
                                 }
                             };

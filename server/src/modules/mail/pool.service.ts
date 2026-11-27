@@ -199,6 +199,8 @@ export const poolService = {
                 email: true,
                 clientId: true,
                 refreshToken: true,
+                imapClientId: true,
+                imapRefreshToken: true,
                 groupId: true,
                 group: {
                     select: {
@@ -216,6 +218,7 @@ export const poolService = {
         return {
             ...email,
             refreshToken: decrypt(email.refreshToken),
+            imapRefreshToken: email.imapRefreshToken ? decrypt(email.imapRefreshToken) : null,
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };
     },

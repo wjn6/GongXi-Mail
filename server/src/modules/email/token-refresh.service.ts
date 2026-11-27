@@ -323,6 +323,8 @@ export const tokenRefreshService = {
                 email: true,
                 clientId: true,
                 refreshToken: true,
+                imapClientId: true,
+                imapRefreshToken: true,
                 status: true,
                 errorMessage: true,
                 group: { select: { oauthTenant: true } },
@@ -338,8 +340,10 @@ export const tokenRefreshService = {
         }
 
         let currentRefreshToken: string;
+        let currentImapRefreshToken: string | null;
         try {
             currentRefreshToken = decrypt(account.refreshToken);
+            currentImapRefreshToken = account.imapRefreshToken ? decrypt(account.imapRefreshToken) : null;
         } catch {
             const msg = 'Failed to decrypt refresh token (was ENCRYPTION_KEY changed?)';
             logger.error({ emailId, email: account.email }, '解密 refresh token 失败');
@@ -351,48 +355,90 @@ export const tokenRefreshService = {
         }
 
         const tenant = normalizeOAuthTenant(account.group?.oauthTenant);
-        const result = await exchangeRefreshToken({
-            clientId: account.clientId,
-            refreshToken: currentRefreshToken,
-            tenant,
-        });
-
-        if (!result.ok) {
-            const accountLevel = isAccountLevelOAuthFailure(result.failure);
-            // 去掉 Trace ID 等噪声，账号层面的问题（如 refresh token 失效）附带处理建议
-            const errorMsg = formatOAuthFailure(result.failure);
-            logger.warn({
-                email: account.email,
-                emailId,
-                tenant,
-                status: result.failure.status,
-                kind: result.failure.kind,
-                aadsts: result.failure.aadsts,
-            }, `Token 刷新失败: ${errorMsg}`);
-            await prisma.emailAccount.update({
-                where: { id: emailId },
-                data: getFailureUpdateData(account, errorMsg, accountLevel),
-            });
-            return { emailId, email: account.email, success: false, message: errorMsg.substring(0, 300) };
+        // 独立 IMAP 凭据（Graph 与 IMAP 由不同应用授权）也要定期刷新，否则长期不用会过期
+        const slots: Array<{ slot: 'main' | 'imap'; label: string; clientId: string; refreshToken: string }> = [
+            { slot: 'main', label: 'Graph', clientId: account.clientId, refreshToken: currentRefreshToken },
+        ];
+        const hasImap = !!account.imapClientId && !!currentImapRefreshToken
+            && !(account.imapClientId === account.clientId && currentImapRefreshToken === currentRefreshToken);
+        if (hasImap) {
+            slots.push({ slot: 'imap', label: 'IMAP', clientId: account.imapClientId!, refreshToken: currentImapRefreshToken! });
         }
 
-        // 微软通常会返回新的 refresh token（轮换）；没有返回时旧令牌仍然有效，继续使用
-        const rotated = !!result.refreshToken && result.refreshToken !== currentRefreshToken;
+        const tokenData: Prisma.EmailAccountUpdateInput = {};
+        const failures: Array<{ label: string; message: string; accountLevel: boolean }> = [];
+        let rotatedAny = false;
+        for (const item of slots) {
+            const result = await exchangeRefreshToken({ clientId: item.clientId, refreshToken: item.refreshToken, tenant });
+            if (!result.ok) {
+                // 去掉 Trace ID 等噪声，账号层面的问题（如 refresh token 失效）附带处理建议
+                const errorMsg = formatOAuthFailure(result.failure);
+                logger.warn({
+                    email: account.email,
+                    emailId,
+                    tenant,
+                    slot: item.slot,
+                    status: result.failure.status,
+                    kind: result.failure.kind,
+                    aadsts: result.failure.aadsts,
+                }, `Token 刷新失败: ${errorMsg}`);
+                failures.push({ label: item.label, message: errorMsg, accountLevel: isAccountLevelOAuthFailure(result.failure) });
+                continue;
+            }
+            // 微软通常会返回新的 refresh token（轮换）；没有返回时旧令牌仍然有效，继续使用
+            if (result.refreshToken && result.refreshToken !== item.refreshToken) {
+                rotatedAny = true;
+                if (item.slot === 'imap') {
+                    tokenData.imapRefreshToken = encrypt(result.refreshToken);
+                } else {
+                    tokenData.refreshToken = encrypt(result.refreshToken);
+                }
+            }
+        }
+
+        const okCount = slots.length - failures.length;
+        const failureMessage = failures
+            .map((item) => (hasImap ? `${item.label}: ${item.message}` : item.message))
+            .join('; ');
+
+        if (okCount === 0) {
+            // 所有凭据都失败：都是账号层面的原因时标记为异常
+            await prisma.emailAccount.update({
+                where: { id: emailId },
+                data: getFailureUpdateData(account, failureMessage, failures.every((item) => item.accountLevel)),
+            });
+            return { emailId, email: account.email, success: false, message: failureMessage.substring(0, 300) };
+        }
+
+        if (failures.length > 0) {
+            // 部分凭据可用：账号仍可用（收信会回退到可用的路径），记录失败的那一份
+            await prisma.emailAccount.update({
+                where: { id: emailId },
+                data: {
+                    ...tokenData,
+                    tokenRefreshedAt: new Date(),
+                    errorMessage: formatTokenRefreshError(failureMessage),
+                    ...(account.status === 'ERROR' ? { status: 'ACTIVE' as const } : {}),
+                },
+            });
+            return { emailId, email: account.email, success: false, message: failureMessage.substring(0, 300) };
+        }
+
         await prisma.emailAccount.update({
             where: { id: emailId },
             data: {
-                ...(rotated ? { refreshToken: encrypt(result.refreshToken!) } : {}),
+                ...tokenData,
                 tokenRefreshedAt: new Date(),
                 ...getSuccessUpdateData(account),
             },
         });
 
-        logger.info({ email: account.email, emailId, tenant, rotated }, 'Token 刷新成功');
+        logger.info({ email: account.email, emailId, tenant, rotated: rotatedAny, separateImap: hasImap }, 'Token 刷新成功');
         return {
             emailId,
             email: account.email,
             success: true,
-            message: rotated ? 'OK' : 'OK (Microsoft did not rotate the refresh token; the current one is still valid)',
+            message: rotatedAny ? 'OK' : 'OK (Microsoft did not rotate the refresh token; the current one is still valid)',
         };
     },
 

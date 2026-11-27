@@ -38,22 +38,47 @@ interface Credentials {
     fetchStrategy?: MailFetchStrategy;
     /** 分组的微软登录端点，未设置时为 CONSUMERS */
     oauthTenant?: string | null;
+    /** 单独用于 IMAP / SMTP 的凭据（已解密）；为空时使用主凭据 */
+    imapClientId?: string | null;
+    imapRefreshToken?: string | null;
+}
+
+type CredentialSlot = 'main' | 'imap';
+
+/** 是否配置了与主凭据不同的 IMAP 凭据 */
+export function hasSeparateImapCredentials(credentials: Pick<Credentials, 'clientId' | 'refreshToken' | 'imapClientId' | 'imapRefreshToken'>): boolean {
+    return !!credentials.imapClientId && !!credentials.imapRefreshToken
+        && !(credentials.imapClientId === credentials.clientId && credentials.imapRefreshToken === credentials.refreshToken);
+}
+
+function credentialPair(credentials: Credentials, slot: CredentialSlot): { clientId: string; refreshToken: string } {
+    return slot === 'imap' && hasSeparateImapCredentials(credentials)
+        ? { clientId: credentials.imapClientId!, refreshToken: credentials.imapRefreshToken! }
+        : { clientId: credentials.clientId, refreshToken: credentials.refreshToken };
 }
 
 /**
  * 微软换取访问令牌时会轮换 refresh token：保存新的，避免旧令牌过期后整个账号失效。
  * 失败只记日志，不影响本次收信 / 发信。
  */
-async function persistRotatedRefreshToken(credentials: Credentials, newToken: string | null) {
-    if (!newToken || newToken === credentials.refreshToken || !credentials.id) {
+async function persistRotatedRefreshToken(credentials: Credentials, newToken: string | null, slot: CredentialSlot = 'main') {
+    const useImap = slot === 'imap' && hasSeparateImapCredentials(credentials);
+    const current = useImap ? credentials.imapRefreshToken : credentials.refreshToken;
+    if (!newToken || newToken === current || !credentials.id) {
         return;
     }
     try {
         await prisma.emailAccount.update({
             where: { id: credentials.id },
-            data: { refreshToken: encrypt(newToken), tokenRefreshedAt: new Date() },
+            data: useImap
+                ? { imapRefreshToken: encrypt(newToken), tokenRefreshedAt: new Date() }
+                : { refreshToken: encrypt(newToken), tokenRefreshedAt: new Date() },
         });
-        credentials.refreshToken = newToken;
+        if (useImap) {
+            credentials.imapRefreshToken = newToken;
+        } else {
+            credentials.refreshToken = newToken;
+        }
     } catch (err) {
         logger.warn({ err, email: credentials.email }, 'Failed to persist rotated refresh token');
     }
@@ -239,23 +264,33 @@ export const mailService = {
             }
         }
 
-        const result = await exchangeRefreshToken({
-            clientId: credentials.clientId,
-            refreshToken: credentials.refreshToken,
-            tenant: credentials.oauthTenant,
-            scope: SMTP_SEND_SCOPE,
-        });
-        if (!result.ok) {
-            logger.warn({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts }, 'SMTP send token request failed');
-            return { error: formatOAuthFailure(result.failure).slice(0, 400) };
-        }
-        await persistRotatedRefreshToken(credentials, result.refreshToken);
+        // SMTP 与 IMAP 同属 outlook.office.com：有独立 IMAP 凭据时先用它，拿不到 SMTP.Send 再试主凭据
+        const slots: CredentialSlot[] = hasSeparateImapCredentials(credentials) ? ['imap', 'main'] : ['main'];
+        let fallback: { accessToken: string; hasSmtpSend: boolean; scope: string } | null = null;
+        let lastError = '';
+        for (const slot of slots) {
+            const pair = credentialPair(credentials, slot);
+            const result = await exchangeRefreshToken({
+                clientId: pair.clientId,
+                refreshToken: pair.refreshToken,
+                tenant: credentials.oauthTenant,
+                scope: SMTP_SEND_SCOPE,
+            });
+            if (!result.ok) {
+                logger.warn({ email: credentials.email, slot, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts }, 'SMTP send token request failed');
+                lastError = formatOAuthFailure(result.failure).slice(0, 400);
+                continue;
+            }
+            await persistRotatedRefreshToken(credentials, result.refreshToken, slot);
 
-        const hasSmtpSend = hasSmtpSendScope(result.scope);
-        if (hasSmtpSend) {
-            await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+            const hasSmtpSend = hasSmtpSendScope(result.scope);
+            if (hasSmtpSend) {
+                await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+                return { accessToken: result.accessToken, hasSmtpSend, scope: result.scope };
+            }
+            fallback = fallback ?? { accessToken: result.accessToken, hasSmtpSend, scope: result.scope };
         }
-        return { accessToken: result.accessToken, hasSmtpSend, scope: result.scope };
+        return fallback ?? { error: lastError || 'Failed to get SMTP access token' };
     },
 
     async clearSmtpSendToken(email: string) {
@@ -397,18 +432,20 @@ export const mailService = {
             return { ok: true, accessToken: cachedToken };
         }
 
-        // 注意：IMAP 不需要 scope，按授权时的权限签发
+        // 注意：IMAP 不需要 scope，按授权时的权限签发；配置了独立 IMAP 凭据时用它
+        const slot: CredentialSlot = hasSeparateImapCredentials(credentials) ? 'imap' : 'main';
+        const pair = credentialPair(credentials, slot);
         const result = await exchangeRefreshToken({
-            clientId: credentials.clientId,
-            refreshToken: credentials.refreshToken,
+            clientId: pair.clientId,
+            refreshToken: pair.refreshToken,
             tenant: credentials.oauthTenant,
             proxyConfig,
         });
         if (!result.ok) {
-            logger.error({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts, error: result.failure.description }, 'IMAP token request failed');
+            logger.error({ email: credentials.email, slot, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts, error: result.failure.description }, 'IMAP token request failed');
             return result;
         }
-        await persistRotatedRefreshToken(credentials, result.refreshToken);
+        await persistRotatedRefreshToken(credentials, result.refreshToken, slot);
 
         await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
         return { ok: true, accessToken: result.accessToken };
