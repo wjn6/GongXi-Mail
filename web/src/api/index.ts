@@ -671,7 +671,41 @@ export const sendApi = {
 
     getStats: <T = Record<string, unknown>>() =>
         requestGet<T>('/admin/send-logs/stats', { cacheMs: 2000 }),
+
+    getSenders: <T = Record<string, unknown>>(params: { keyword?: string; groupId?: number; limit?: number }) =>
+        requestGet<T[]>('/admin/send/senders', { params, cacheMs: 1000 }),
+
+    compose: (data: ComposeRequest) =>
+        requestPost<ComposeResult, ComposeRequest>('/admin/send/compose', data, {
+            // 换号重试时 Graph 调用可能较慢
+            timeout: 120000,
+            invalidatePrefixes: ['/admin/send-logs', '/admin/send/senders', '/admin/emails'],
+        }),
 };
+
+export interface ComposeRequest {
+    mode: 'POOL' | 'ACCOUNT';
+    groupId?: number;
+    accountId?: number;
+    fromName?: string;
+    to: string[];
+    cc?: string[];
+    bcc?: string[];
+    replyTo?: string[];
+    subject: string;
+    html?: string;
+    text?: string;
+    attachments?: Array<{ filename: string; content: string; contentType?: string }>;
+}
+
+export interface ComposeResult {
+    sent: boolean;
+    logId: string | null;
+    fromAddress: string | null;
+    attempts: number;
+    message: string;
+    reason: string | null;
+}
 
 // ========================================
 // 仪表盘 API

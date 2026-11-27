@@ -49,14 +49,14 @@ async function recoverStaleRows() {
     // 已领取但未开始发送（进程中断）：释放后重新排队
     await prisma.$executeRaw`
         UPDATE send_logs SET locked_at = NULL
-        WHERE status = 'QUEUED' AND locked_at < ${DB_NOW} - make_interval(mins => ${STALE_LOCK_MINUTES})
+        WHERE status = 'QUEUED' AND locked_at < ${DB_NOW} - make_interval(mins => ${STALE_LOCK_MINUTES}::int)
     `;
     // 发送中断：无法确认 Graph 是否已接收，标记失败避免重复发送
     await prisma.$executeRaw`
         UPDATE send_logs
         SET status = 'FAILED', locked_at = NULL, error_code = 'INTERRUPTED',
             error_message = 'Sending was interrupted; the email may or may not have been sent.'
-        WHERE status = 'SENDING' AND locked_at < ${DB_NOW} - make_interval(mins => ${STALE_LOCK_MINUTES})
+        WHERE status = 'SENDING' AND locked_at < ${DB_NOW} - make_interval(mins => ${STALE_LOCK_MINUTES}::int)
     `;
 }
 

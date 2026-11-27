@@ -24,6 +24,7 @@ import mailRoutes from './modules/mail/mail.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import resendRoutes from './modules/resend/resend.routes.js';
 import sendLogRoutes from './modules/send/send-log.routes.js';
+import sendAdminRoutes from './modules/send/send-admin.routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +110,7 @@ export async function buildApp() {
     await fastify.register(groupRoutes, { prefix: '/admin/email-groups' });
     await fastify.register(dashboardRoutes, { prefix: '/admin/dashboard' });
     await fastify.register(sendLogRoutes, { prefix: '/admin/send-logs' });
+    await fastify.register(sendAdminRoutes, { prefix: '/admin/send' });
 
     // 外部 API
     await fastify.register(mailRoutes, { prefix: '/api' });
