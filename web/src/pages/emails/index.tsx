@@ -46,6 +46,12 @@ import {
     SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { emailApi, groupApi, sendApi, type OAuthTenantValue, type SendStrategyValue } from '../../api';
+import {
+    SEND_TRANSPORT_LABELS,
+    SEND_TRANSPORT_OPTIONS,
+    effectiveSendCapability,
+    type SendTransportValue,
+} from '../../constants/sendTransport';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
@@ -97,9 +103,20 @@ const SEND_GROUP_DEFAULTS = {
     sendDailyLimit: 30,
     sendIntervalSeconds: 60,
     sendMaxRecipients: 10,
+    sendTransport: 'AUTO' as SendTransportValue,
 };
 
-const renderSendCapability = (record: Pick<EmailAccount, 'sendCapability' | 'sendCooldownUntil' | 'sendErrorMessage'>) => {
+const CAPABILITY_TEXT: Record<SendCapability, string> = {
+    ALLOWED: '可用',
+    DENIED: '不可用',
+    UNKNOWN: '未检测',
+};
+
+/** 账号在所在分组发信通道下的有效发信能力（未分组按自动） */
+const accountSendCapability = (record: Pick<EmailAccount, 'sendCapability' | 'smtpCapability' | 'group'>): SendCapability =>
+    effectiveSendCapability(record.group?.sendTransport ?? 'AUTO', record.sendCapability, record.smtpCapability);
+
+const renderSendCapability = (record: Pick<EmailAccount, 'sendCapability' | 'smtpCapability' | 'group' | 'sendCooldownUntil' | 'sendErrorMessage'>) => {
     const coolingUntil = record.sendCooldownUntil && dayjs(record.sendCooldownUntil).isAfter(dayjs())
         ? dayjs(record.sendCooldownUntil)
         : null;
@@ -108,9 +125,10 @@ const renderSendCapability = (record: Pick<EmailAccount, 'sendCapability' | 'sen
         DENIED: { color: 'red', label: '无发信权限' },
         UNKNOWN: { color: 'default', label: '未检测' },
     };
-    const capability = (record.sendCapability || 'UNKNOWN') as SendCapability;
+    const capability = accountSendCapability(record);
     const tag = <Tag color={meta[capability].color} style={{ marginInlineEnd: 0 }}>{meta[capability].label}</Tag>;
     const tooltip = [
+        `Graph：${CAPABILITY_TEXT[record.sendCapability || 'UNKNOWN']}；SMTP：${CAPABILITY_TEXT[record.smtpCapability || 'UNKNOWN']}（分组发信通道：${SEND_TRANSPORT_LABELS[record.group?.sendTransport ?? 'AUTO']}）`,
         coolingUntil ? `冷却至 ${coolingUntil.format('MM-DD HH:mm')}` : null,
         record.sendErrorMessage,
     ].filter(Boolean).join('；');
@@ -148,6 +166,7 @@ interface EmailGroup {
     description: string | null;
     fetchStrategy: MailFetchStrategy;
     oauthTenant?: OAuthTenantValue;
+    sendTransport?: SendTransportValue;
     sendEnabled: boolean;
     sendStrategy: SendStrategyValue;
     sendDailyLimit: number;
@@ -164,11 +183,12 @@ interface EmailAccount {
     clientId: string;
     status: EmailStatus;
     groupId: number | null;
-    group: { id: number; name: string } | null;
+    group: { id: number; name: string; sendTransport?: SendTransportValue } | null;
     lastCheckAt: string | null;
     tokenRefreshedAt: string | null;
     errorMessage: string | null;
     sendCapability?: SendCapability;
+    smtpCapability?: SendCapability;
     sendCheckedAt?: string | null;
     lastSentAt?: string | null;
     sendCooldownUntil?: string | null;
@@ -591,10 +611,11 @@ const EmailsPage: React.FC = () => {
         try {
             const res = await sendApi.checkSend(record.id);
             const result = res.data;
+            const detail = `Graph ${CAPABILITY_TEXT[result.graph ?? 'UNKNOWN']}，SMTP ${CAPABILITY_TEXT[result.smtp ?? 'UNKNOWN']}`;
             if (result.capability === 'ALLOWED') {
-                message.success(`${record.email} 可以发信`);
+                message.success(`${record.email} 可以发信（${detail}）`);
             } else if (result.capability === 'DENIED') {
-                message.warning(`${record.email} 的令牌没有 Mail.Send 权限`);
+                message.warning(`${record.email} 在所在分组的发信通道下不能发信（${detail}）：${result.message}`);
             } else {
                 message.error(`检测失败：${result.message}`);
             }
@@ -640,7 +661,7 @@ const EmailsPage: React.FC = () => {
                 text: values.text || undefined,
             });
             if (res.data.sent) {
-                message.success('Graph 已接收这封邮件（是否送达以收件方为准）');
+                message.success(`${res.data.transport === 'SMTP' ? 'Outlook SMTP' : 'Microsoft Graph'} 已接收这封邮件（是否送达以收件方为准）`);
                 setTestSendTarget(null);
             } else {
                 message.error(`发送失败：${res.data.message}`);
@@ -673,6 +694,7 @@ const EmailsPage: React.FC = () => {
             sendDailyLimit: group.sendDailyLimit ?? SEND_GROUP_DEFAULTS.sendDailyLimit,
             sendIntervalSeconds: group.sendIntervalSeconds ?? SEND_GROUP_DEFAULTS.sendIntervalSeconds,
             sendMaxRecipients: group.sendMaxRecipients ?? SEND_GROUP_DEFAULTS.sendMaxRecipients,
+            sendTransport: group.sendTransport ?? SEND_GROUP_DEFAULTS.sendTransport,
         });
         setGroupModalVisible(true);
     }, [groupForm]);
@@ -845,7 +867,7 @@ const EmailsPage: React.FC = () => {
                             type="text"
                             icon={<SendOutlined />}
                             onClick={() => openTestSend(record)}
-                            disabled={record.sendCapability === 'DENIED'}
+                            disabled={accountSendCapability(record) === 'DENIED'}
                         />
                     </Tooltip>
                     <Tooltip title="刷新 Token">
@@ -1049,7 +1071,7 @@ const EmailsPage: React.FC = () => {
                                         </Text>
                                         <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                             {renderEmailStatusTag(record)}
-                                            {record.sendCapability && record.sendCapability !== 'UNKNOWN' && renderSendCapability(record)}
+                                            {accountSendCapability(record) !== 'UNKNOWN' && renderSendCapability(record)}
                                             {record.group ? (
                                                 <Tag color="blue" style={{ marginInlineEnd: 0 }}>{record.group.name}</Tag>
                                             ) : (
@@ -1103,7 +1125,7 @@ const EmailsPage: React.FC = () => {
                                                     key: 'test-send',
                                                     icon: <SendOutlined />,
                                                     label: '测试发信',
-                                                    disabled: record.sendCapability === 'DENIED',
+                                                    disabled: accountSendCapability(record) === 'DENIED',
                                                 },
                                                 { key: 'edit', icon: <EditOutlined />, label: '编辑' },
                                                 { type: 'divider' },
@@ -1176,9 +1198,12 @@ const EmailsPage: React.FC = () => {
             key: 'sendEnabled',
             width: 230,
             render: (_: unknown, record: EmailGroup) => (record.sendEnabled ? (
-                <Tooltip title={`每账号 24 小时 ${record.sendDailyLimit} 封，间隔 ${record.sendIntervalSeconds} 秒，每封最多 ${record.sendMaxRecipients} 个收件人`}>
+                <Tooltip title={`发信通道：${SEND_TRANSPORT_LABELS[record.sendTransport ?? 'AUTO']}；每账号 24 小时 ${record.sendDailyLimit} 封，间隔 ${record.sendIntervalSeconds} 秒，每封最多 ${record.sendMaxRecipients} 个收件人`}>
                     <Space size={4} wrap>
                         <Tag color="green" style={{ marginInlineEnd: 0 }}>已开启</Tag>
+                        <Tag color={(record.sendTransport ?? 'AUTO') === 'GRAPH' ? 'default' : 'cyan'} style={{ marginInlineEnd: 0 }}>
+                            {SEND_TRANSPORT_LABELS[record.sendTransport ?? 'AUTO']}
+                        </Tag>
                         <Tag style={{ marginInlineEnd: 0 }}>{SEND_STRATEGY_LABELS[record.sendStrategy] ?? record.sendStrategy}</Tag>
                         <Text type="secondary" style={{ fontSize: 12 }}>{record.sendDailyLimit} 封/天</Text>
                     </Space>
@@ -1673,6 +1698,14 @@ const EmailsPage: React.FC = () => {
                         extra="开启后，组内能发信的账号会被 Resend 兼容接口轮换使用"
                     >
                         <Switch />
+                    </Form.Item>
+                    <Form.Item
+                        name="sendTransport"
+                        label="发信通道"
+                        rules={[{ required: true, message: '请选择发信通道' }]}
+                        extra="Graph 会忽略自定义发件人名称（改用账号资料里的名字）；SMTP 会保留名称，但要求令牌含 SMTP.Send 权限且邮箱没有禁用 SMTP 认证。在线发信、测试发信和 Resend 接口都按此设置"
+                    >
+                        <Select options={SEND_TRANSPORT_OPTIONS} />
                     </Form.Item>
                     <Form.Item noStyle shouldUpdate={(prev, next) => prev.sendEnabled !== next.sendEnabled}>
                         {({ getFieldValue }) => getFieldValue('sendEnabled') ? (

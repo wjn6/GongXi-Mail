@@ -5,6 +5,8 @@ import { setCache, getCache, deleteCache } from '../../lib/redis.js';
 import { hasMailSendScope } from '../../lib/send-mail.js';
 import { encrypt } from '../../lib/crypto.js';
 import { exchangeRefreshToken, normalizeOAuthTenant } from '../../lib/ms-oauth.js';
+import nodemailer, { type SendMailOptions } from 'nodemailer';
+import { SMTP_PORT, SMTP_SEND_SCOPE, hasSmtpSendScope, smtpHostFor } from '../../lib/smtp-send.js';
 import {
     combineFetchFailures,
     fetchFailureFromError,
@@ -219,6 +221,80 @@ export const mailService = {
 
     async clearGraphSendToken(email: string) {
         await deleteCache(`graph_send_token_${email}`);
+    },
+
+    /**
+     * 获取用于 SMTP（XOAUTH2）发信的 Outlook 令牌，并返回是否包含 SMTP.Send 权限。
+     * 只有包含 SMTP.Send 时才缓存；force 为 true 时跳过缓存。
+     */
+    async getSmtpSendToken(
+        credentials: Credentials,
+        options: { force?: boolean } = {}
+    ): Promise<{ accessToken: string; hasSmtpSend: boolean; scope: string } | { error: string }> {
+        const cacheKey = `smtp_send_token_${credentials.email}`;
+        if (!options.force) {
+            const cached = await getCache(cacheKey);
+            if (cached) {
+                return { accessToken: cached, hasSmtpSend: true, scope: 'SMTP.Send' };
+            }
+        }
+
+        const result = await exchangeRefreshToken({
+            clientId: credentials.clientId,
+            refreshToken: credentials.refreshToken,
+            tenant: credentials.oauthTenant,
+            scope: SMTP_SEND_SCOPE,
+        });
+        if (!result.ok) {
+            logger.warn({ email: credentials.email, tenant: normalizeOAuthTenant(credentials.oauthTenant), kind: result.failure.kind, aadsts: result.failure.aadsts }, 'SMTP send token request failed');
+            return { error: formatOAuthFailure(result.failure).slice(0, 400) };
+        }
+        await persistRotatedRefreshToken(credentials, result.refreshToken);
+
+        const hasSmtpSend = hasSmtpSendScope(result.scope);
+        if (hasSmtpSend) {
+            await setCache(cacheKey, result.accessToken, Math.max(result.expiresIn - 60, 60));
+        }
+        return { accessToken: result.accessToken, hasSmtpSend, scope: result.scope };
+    },
+
+    async clearSmtpSendToken(email: string) {
+        await deleteCache(`smtp_send_token_${email}`);
+    },
+
+    /**
+     * 通过 Outlook SMTP（587 + STARTTLS + XOAUTH2）发信；verifyOnly 时只连接并认证，不发信（用于检测）。
+     * 成功表示 SMTP 服务器已接收（不代表已送达）。
+     */
+    async sendMailViaSmtp(
+        accessToken: string,
+        account: { email: string; oauthTenant?: string | null },
+        message: SendMailOptions | null
+    ): Promise<{ ok: true; messageId: string | null } | { ok: false; error: unknown }> {
+        const transporter = nodemailer.createTransport({
+            host: smtpHostFor(account.oauthTenant),
+            port: SMTP_PORT,
+            secure: false,
+            requireTLS: true,
+            auth: { type: 'OAuth2', user: account.email, accessToken },
+            connectionTimeout: 20_000,
+            greetingTimeout: 20_000,
+            socketTimeout: 60_000,
+            disableFileAccess: true,
+            disableUrlAccess: true,
+        });
+        try {
+            if (!message) {
+                await transporter.verify();
+                return { ok: true, messageId: null };
+            }
+            const info = await transporter.sendMail(message);
+            return { ok: true, messageId: typeof info.messageId === 'string' ? info.messageId : null };
+        } catch (err) {
+            return { ok: false, error: err };
+        } finally {
+            transporter.close();
+        }
     },
 
     /**

@@ -12,12 +12,16 @@ export const sendStrategySchema = z.enum(['LEAST_USED', 'ROUND_ROBIN', 'RANDOM']
 /** 换取令牌使用的微软登录端点：consumers（个人账号）/ organizations（工作或学校账号）/ common（两者） */
 export const oauthTenantSchema = z.enum(['CONSUMERS', 'ORGANIZATIONS', 'COMMON']);
 
+/** 发信通道：AUTO 填了发件人名称时走 SMTP（保留名称），否则走 Graph，互为备用；GRAPH / SMTP 只用该通道 */
+export const sendTransportSchema = z.enum(['AUTO', 'GRAPH', 'SMTP']);
+
 const sendSettingsSchema = {
     sendEnabled: z.boolean(),
     sendStrategy: sendStrategySchema,
     sendDailyLimit: z.number().int().min(1).max(10000),
     sendIntervalSeconds: z.number().int().min(0).max(24 * 60 * 60),
     sendMaxRecipients: z.number().int().min(1).max(150),
+    sendTransport: sendTransportSchema,
 };
 
 export const createGroupSchema = z.object({
@@ -30,6 +34,7 @@ export const createGroupSchema = z.object({
     sendDailyLimit: sendSettingsSchema.sendDailyLimit.optional(),
     sendIntervalSeconds: sendSettingsSchema.sendIntervalSeconds.optional(),
     sendMaxRecipients: sendSettingsSchema.sendMaxRecipients.optional(),
+    sendTransport: sendSettingsSchema.sendTransport.optional(),
 });
 
 export const updateGroupSchema = z.object({
@@ -42,6 +47,7 @@ export const updateGroupSchema = z.object({
     sendDailyLimit: sendSettingsSchema.sendDailyLimit.optional(),
     sendIntervalSeconds: sendSettingsSchema.sendIntervalSeconds.optional(),
     sendMaxRecipients: sendSettingsSchema.sendMaxRecipients.optional(),
+    sendTransport: sendSettingsSchema.sendTransport.optional(),
 });
 
 export const assignEmailsSchema = z.object({

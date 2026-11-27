@@ -575,6 +575,7 @@ export const emailApi = {
 type MailFetchStrategyValue = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY';
 export type SendStrategyValue = 'LEAST_USED' | 'ROUND_ROBIN' | 'RANDOM';
 export type OAuthTenantValue = 'CONSUMERS' | 'ORGANIZATIONS' | 'COMMON';
+export type SendTransportValue = 'AUTO' | 'GRAPH' | 'SMTP';
 
 interface GroupInput {
     name?: string;
@@ -586,6 +587,7 @@ interface GroupInput {
     sendDailyLimit?: number;
     sendIntervalSeconds?: number;
     sendMaxRecipients?: number;
+    sendTransport?: SendTransportValue;
 }
 
 export const groupApi = {
@@ -632,7 +634,10 @@ export const groupApi = {
 export interface SendCheckResult {
     id: number;
     email: string;
+    /** 按所在分组发信通道得出的有效结果 */
     capability: 'ALLOWED' | 'DENIED' | 'UNKNOWN';
+    graph: 'ALLOWED' | 'DENIED' | 'UNKNOWN';
+    smtp: 'ALLOWED' | 'DENIED' | 'UNKNOWN';
     message: string;
 }
 
@@ -650,7 +655,7 @@ export const sendApi = {
         ),
 
     testSend: (id: number, data: { to: string; subject?: string; text?: string }) =>
-        requestPost<{ sent: boolean; logId: string; message: string; reason: string | null }, { to: string; subject?: string; text?: string }>(
+        requestPost<{ sent: boolean; logId: string; message: string; reason: string | null; transport: string | null }, { to: string; subject?: string; text?: string }>(
             `/admin/emails/${id}/test-send`,
             data,
             { invalidatePrefixes: ['/admin/emails', '/admin/send-logs'] }
@@ -705,6 +710,8 @@ export interface ComposeResult {
     logId: string | null;
     fromAddress: string | null;
     attempts: number;
+    /** 实际发信通道：GRAPH / SMTP / GRAPH_FALLBACK */
+    transport: string | null;
     message: string;
     reason: string | null;
 }

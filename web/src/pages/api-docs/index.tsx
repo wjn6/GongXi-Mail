@@ -534,18 +534,19 @@ interface ResendEndpoint {
 }
 
 const RESEND_ENDPOINTS: ResendEndpoint[] = [
-  { method: 'POST', path: '/resend/emails', resend: 'POST /emails', permission: LOG_ACTIONS.SEND_MAIL, desc: '发送一封邮件，返回 { id }。同步发送，返回时 Graph 已接收' },
+  { method: 'POST', path: '/resend/emails', resend: 'POST /emails', permission: LOG_ACTIONS.SEND_MAIL, desc: '发送一封邮件，返回 { id }。同步发送，返回时 Graph / SMTP 服务器已接收' },
   { method: 'POST', path: '/resend/emails/batch', resend: 'POST /emails/batch', permission: LOG_ACTIONS.SEND_MAIL, desc: '批量发送，最多 100 封，返回 { data: [{ id }] }。进入队列按池内账号逐封发送；支持 x-batch-validation' },
   { method: 'GET', path: '/resend/emails/:id', resend: 'GET /emails/:id', permission: LOG_ACTIONS.SEND_READ, desc: '查询一封已发邮件（object: "email"）' },
   { method: 'GET', path: '/resend/emails', resend: 'GET /emails', permission: LOG_ACTIONS.SEND_READ, desc: '列出当前 Key 发出的邮件，支持 limit（1~100）、after、before 游标' },
 ];
 
 const RESEND_DIFFERENCES = [
-  { key: 'from', item: 'from', desc: '地址正好是发信池中（Key 范围内、分组已开启发信）的账号时用该账号发；否则从池中挑号，保留显示名，实际发件地址为挑中的账号（查询接口返回实际地址）' },
-  { key: 'pool', item: '发信账号', desc: '来自 Key「可用分组 / 可用邮箱」范围内、分组已开启发信、且令牌带 Mail.Send 权限的账号；按分组的挑号方式、24 小时上限、发信间隔轮换' },
-  { key: 'att', item: 'attachments', desc: '支持 content（base64）和 path（仅 https 公网地址），每封合计 3 MB 以内（Graph 单次请求上限）；批量接口与 Resend 一样不支持附件' },
+  { key: 'from', item: 'from', desc: '地址正好是发信池中（Key 范围内、分组已开启发信）的账号时用该账号发；否则从池中挑号，实际发件地址为挑中的账号（查询接口返回实际地址）。显示名只在走 SMTP 时生效，走 Graph 时微软会改用账号资料里的名字' },
+  { key: 'transport', item: '发信通道', desc: '按分组设置：自动（填了显示名走 SMTP，否则走 Graph，通道不可用时互为备用）/ 仅 Graph / 仅 SMTP' },
+  { key: 'pool', item: '发信账号', desc: '来自 Key「可用分组 / 可用邮箱」范围内、分组已开启发信、且在分组通道下有发信权限（Graph 需 Mail.Send，SMTP 需 SMTP.Send 且邮箱开启 SMTP 认证）的账号；按分组的挑号方式、24 小时上限、发信间隔轮换' },
+  { key: 'att', item: 'attachments', desc: '支持 content（base64）和 path（仅 https 公网地址），每封合计 3 MB 以内；批量接口与 Resend 一样不支持附件' },
   { key: 'headers', item: 'headers', desc: '只支持 X- 开头的自定义头，其它头返回 422' },
-  { key: 'event', item: 'last_event', desc: 'Graph 只能确认已接收：sent（已提交）/ queued（排队中）/ failed（失败），没有 delivered、opened 等事件；message_id 为 null' },
+  { key: 'event', item: 'last_event', desc: '只能确认微软已接收：sent（已提交）/ queued（排队中）/ failed（失败），没有 delivered、opened 等事件；message_id 为 null' },
   { key: 'unsupported', item: '暂不支持', desc: 'scheduled_at、template、topic_id 传入时返回 422，不会被忽略' },
   { key: 'idem', item: 'Idempotency-Key', desc: '与 Resend 相同：24 小时有效，最长 256 字符；同 Key 不同请求体返回 409 invalid_idempotent_request' },
 ];
@@ -570,7 +571,7 @@ const resend = new Resend('sk_your_api_key', { baseUrl: '${baseUrl}/resend' });
 // 也可以设置环境变量 RESEND_BASE_URL=${baseUrl}/resend
 
 const { data, error } = await resend.emails.send({
-  from: 'Acme <noreply@acme.dev>',   // 显示名保留，发件地址为池中账号
+  from: 'Acme <noreply@acme.dev>',   // 发件地址为池中账号；显示名在分组通道为自动 / 仅 SMTP 时生效
   to: ['user@example.com'],
   subject: 'hello world',
   html: '<p>it works!</p>',
@@ -901,15 +902,15 @@ const ApiDocsPage: React.FC = () => {
         {filteredEndpoints.length === 0 && <Text type="secondary">没有匹配的接口</Text>}
       </Card>
 
-      <Card title="Resend 兼容接口（Graph 账号池发信）" style={{ marginBottom: 16 }} id="resend">
+      <Card title="Resend 兼容接口（Outlook 账号池发信）" style={{ marginBottom: 16 }} id="resend">
         <Paragraph style={{ marginBottom: 8 }}>
           与 Resend 发信接口保持一致：请求字段、响应结构和错误格式都相同，现有 Resend SDK 或代码只需把接口地址改成
-          <Text code copyable>{`${baseUrl}/resend`}</Text>，密钥换成本系统的 API Key。邮件实际由分组发信池中的 Outlook 账号通过 Microsoft Graph 发出。
+          <Text code copyable>{`${baseUrl}/resend`}</Text>，密钥换成本系统的 API Key。邮件实际由分组发信池中的 Outlook 账号发出，通道（Microsoft Graph 或 Outlook SMTP）按分组的发信通道设置。
         </Paragraph>
         <ul style={{ paddingInlineStart: 20, margin: '0 0 12px' }}>
           <li>认证：<Text code>Authorization: Bearer sk_your_api_key</Text></li>
           <li>权限：发信需要 <Text code>send_mail</Text>，查询需要 <Text code>send_read</Text>。这两项必须在 API Key 中单独勾选，未配置权限的 Key 也不能调用。</li>
-          <li>准备：在「邮箱管理 → 邮箱分组」开启分组的发信，并在邮箱列表中检测账号的发信权限（令牌需带 Mail.Send）。</li>
+          <li>准备：在「邮箱管理 → 邮箱分组」开启分组的发信，并在邮箱列表中检测账号的发信权限（Graph 需 Mail.Send，SMTP 需 SMTP.Send）。</li>
           <li>错误格式：<Text code>{'{"statusCode": 422, "name": "validation_error", "message": "..."}'}</Text></li>
         </ul>
 
@@ -937,7 +938,7 @@ const ApiDocsPage: React.FC = () => {
         <SectionTitle>curl 示例</SectionTitle>
         <CodeBlock code={RESEND_CURL(baseUrl)} />
 
-        <SectionTitle>与 Resend 的差异（由 Graph 发信决定）</SectionTitle>
+        <SectionTitle>与 Resend 的差异（由 Outlook 账号发信决定）</SectionTitle>
         <Table
           dataSource={RESEND_DIFFERENCES}
           columns={[

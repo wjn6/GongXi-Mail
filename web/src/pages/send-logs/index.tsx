@@ -24,6 +24,7 @@ import { PageHeader } from '../../components';
 import { groupApi, sendApi } from '../../api';
 import { requestData } from '../../utils/request';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { SEND_TRANSPORT_LABELS, TRANSPORT_USED_META, type SendTransportValue } from '../../constants/sendTransport';
 
 const { Text, Paragraph } = Typography;
 
@@ -47,6 +48,7 @@ interface SendLogItem {
     recipientCount: number;
     attachmentCount: number;
     attempts: number;
+    transport: string | null;
     errorCode: string | null;
     errorMessage: string | null;
     batchId: string | null;
@@ -74,6 +76,7 @@ interface GroupStats {
     id: number;
     name: string;
     sendEnabled: boolean;
+    sendTransport?: SendTransportValue;
     sendStrategy: string;
     sendDailyLimit: number;
     sendIntervalSeconds: number;
@@ -97,6 +100,17 @@ const STATUS_META: Record<SendStatus, { color: string; label: string }> = {
     SENDING: { color: 'processing', label: '发送中' },
     SENT: { color: 'green', label: '已提交' },
     FAILED: { color: 'red', label: '失败' },
+};
+
+const renderTransport = (transport: string | null) => {
+    if (!transport) return <Text type="secondary">-</Text>;
+    const meta = TRANSPORT_USED_META[transport];
+    if (!meta) return <Tag style={{ marginInlineEnd: 0 }}>{transport}</Tag>;
+    return (
+        <Tooltip title={meta.tip}>
+            <Tag color={meta.color} style={{ marginInlineEnd: 0 }}>{meta.label}</Tag>
+        </Tooltip>
+    );
 };
 
 const SOURCE_LABELS: Record<SendSource, string> = {
@@ -223,7 +237,7 @@ const SendLogsPage: React.FC = () => {
             key: 'rule',
             render: (_: unknown, record) => (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                    每账号 {record.sendDailyLimit} 封/24h · 间隔 {record.sendIntervalSeconds}s · 收件人 ≤ {record.sendMaxRecipients}
+                    {SEND_TRANSPORT_LABELS[record.sendTransport ?? 'AUTO']} · 每账号 {record.sendDailyLimit} 封/24h · 间隔 {record.sendIntervalSeconds}s · 收件人 ≤ {record.sendMaxRecipients}
                 </Text>
             ),
         },
@@ -272,6 +286,7 @@ const SendLogsPage: React.FC = () => {
                 </Space>
             ),
         },
+        { title: '通道', key: 'transport', width: 120, render: (_: unknown, record) => renderTransport(record.transport) },
         { title: '尝试', dataIndex: 'attempts', key: 'attempts', width: 70 },
     ];
 
@@ -465,6 +480,7 @@ const SendLogsPage: React.FC = () => {
                                 )}
                                 <Descriptions.Item label="创建时间">{formatTime(detail.createdAt)}</Descriptions.Item>
                                 <Descriptions.Item label="提交时间">{formatTime(detail.sentAt)}</Descriptions.Item>
+                                <Descriptions.Item label="发信通道">{renderTransport(detail.transport)}</Descriptions.Item>
                                 <Descriptions.Item label="尝试账号数">{detail.attempts}</Descriptions.Item>
                                 {detail.batchId && <Descriptions.Item label="批次">{detail.batchId}</Descriptions.Item>}
                             </Descriptions>

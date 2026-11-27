@@ -16,7 +16,8 @@ import {
     normalizeSendRequest,
     type NormalizedSendRequest,
 } from '../../lib/send-mail.js';
-import { sendFromPool, sendWithAccount, type SendOutcome, type SendScope } from './send.service.js';
+import { effectiveSendCapability } from '../../lib/smtp-send.js';
+import { EFFECTIVE_SEND_CAPABILITY_SQL, sendFromPool, sendWithAccount, type SendOutcome, type SendScope } from './send.service.js';
 
 const DB_NOW = Prisma.sql`(now() AT TIME ZONE 'UTC')`;
 /** 3 MB 附件 base64 后约 4 MB，再加正文 */
@@ -58,7 +59,11 @@ const sendersSchema = z.object({
 interface SenderRow {
     id: number;
     email: string;
+    /** 按所在分组发信通道得出的有效发信能力 */
     sendCapability: 'UNKNOWN' | 'ALLOWED' | 'DENIED';
+    graphCapability: 'UNKNOWN' | 'ALLOWED' | 'DENIED';
+    smtpCapability: 'UNKNOWN' | 'ALLOWED' | 'DENIED';
+    sendTransport: 'AUTO' | 'GRAPH' | 'SMTP';
     sendCooldownUntil: Date | null;
     lastSentAt: Date | null;
     sendErrorMessage: string | null;
@@ -78,7 +83,7 @@ function outcomeMessage(outcome: Extract<SendOutcome, { ok: false }>): string {
         case 'NO_POOL':
             return '没有可用的发信账号：请确认分组已开启发信，且组内有正常状态的账号';
         case 'NO_PERMISSION':
-            return '可用账号都没有 Mail.Send 发信权限';
+            return '可用账号都不能发信：Graph 需要 Mail.Send 权限，SMTP 需要 SMTP.Send 权限且邮箱开启 SMTP 认证';
         case 'TOO_MANY_RECIPIENTS':
             return `收件人太多：分组每封最多 ${outcome.maxRecipients ?? 0} 个收件人（收件人 + 抄送 + 密送）`;
         case 'DAILY_QUOTA':
@@ -107,7 +112,7 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
         const input = sendersSchema.parse(request.query);
         const conditions: Prisma.Sql[] = [
             Prisma.sql`a.status = 'ACTIVE'`,
-            Prisma.sql`a.send_capability <> 'DENIED'`,
+            Prisma.sql`${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED'`,
         ];
         if (input.groupId) {
             conditions.push(Prisma.sql`a.group_id = ${input.groupId}`);
@@ -118,7 +123,10 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
 
         const rows = await prisma.$queryRaw<SenderRow[]>`
             SELECT a.id, a.email,
-                   a.send_capability::text AS "sendCapability",
+                   ${EFFECTIVE_SEND_CAPABILITY_SQL} AS "sendCapability",
+                   a.send_capability::text AS "graphCapability",
+                   a.smtp_capability::text AS "smtpCapability",
+                   COALESCE(g.send_transport::text, 'AUTO') AS "sendTransport",
                    a.send_cooldown_until AS "sendCooldownUntil",
                    a.last_sent_at AS "lastSentAt",
                    a.send_error_message AS "sendErrorMessage",
@@ -134,7 +142,7 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
             FROM email_accounts a
             LEFT JOIN email_groups g ON g.id = a.group_id
             WHERE ${Prisma.join(conditions, ' AND ')}
-            ORDER BY (a.send_capability = 'ALLOWED') DESC, a.id ASC
+            ORDER BY (${EFFECTIVE_SEND_CAPABILITY_SQL} = 'ALLOWED') DESC, a.id ASC
             LIMIT ${input.limit}
         `;
         return { success: true, data: rows };
@@ -169,21 +177,25 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
         }
 
         let requestedFrom: string;
-        let account: { id: number; email: string; sendCapability: string } | null = null;
+        let account: { id: number; email: string } | null = null;
         let groupName: string | null = null;
 
         if (input.mode === 'ACCOUNT') {
-            account = await prisma.emailAccount.findUnique({
+            const found = await prisma.emailAccount.findUnique({
                 where: { id: input.accountId! },
-                select: { id: true, email: true, sendCapability: true, status: true },
+                select: {
+                    id: true, email: true, sendCapability: true, smtpCapability: true,
+                    group: { select: { sendTransport: true } },
+                },
             });
-            if (!account) {
+            if (!found) {
                 throw new AppError('NOT_FOUND', '发件账号不存在', 404);
             }
-            if (account.sendCapability === 'DENIED') {
-                throw new AppError('SEND_PERMISSION_MISSING', '该账号没有 Mail.Send 发信权限，请先重新检测或换一个账号', 400);
+            if (effectiveSendCapability(found.group?.sendTransport, found.sendCapability, found.smtpCapability) === 'DENIED') {
+                throw new AppError('SEND_PERMISSION_MISSING', '该账号在所在分组的发信通道下没有发信权限，请先重新检测或换一个账号', 400);
             }
-            requestedFrom = account.email;
+            account = { id: found.id, email: found.email };
+            requestedFrom = found.email;
         } else {
             if (input.groupId) {
                 const group = await prisma.emailGroup.findUnique({
@@ -255,7 +267,12 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
                     logId,
                     fromAddress: outcome.fromAddress,
                     attempts: outcome.attempts,
-                    message: 'Microsoft Graph 已接收这封邮件',
+                    transport: outcome.transport,
+                    message: outcome.transport === 'SMTP'
+                        ? 'Outlook SMTP 已接收这封邮件'
+                        : outcome.transport === 'GRAPH_FALLBACK'
+                            ? 'Microsoft Graph 已接收这封邮件（SMTP 不可用，已改用 Graph，发件人名称不会生效）'
+                            : 'Microsoft Graph 已接收这封邮件',
                     reason: null,
                 },
             };
@@ -267,6 +284,7 @@ const sendAdminRoutes: FastifyPluginAsync = async (fastify) => {
                 logId: outcome.noAttempt ? null : logId,
                 fromAddress: null,
                 attempts: outcome.attempts,
+                transport: null,
                 message: outcomeMessage(outcome),
                 reason: outcome.reason,
             },

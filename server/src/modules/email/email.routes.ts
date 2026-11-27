@@ -393,8 +393,9 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             data: {
                 sent: outcome.ok,
                 logId,
-                message: outcome.ok ? 'Accepted by Microsoft Graph' : outcome.message,
+                message: outcome.ok ? `Accepted by ${outcome.transport === 'SMTP' ? 'Outlook SMTP' : 'Microsoft Graph'}` : outcome.message,
                 reason: outcome.ok ? null : outcome.reason,
+                transport: outcome.ok ? outcome.transport : null,
             },
         };
     });

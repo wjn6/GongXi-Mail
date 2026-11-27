@@ -25,6 +25,7 @@ export const groupService = {
             sendDailyLimit: g.sendDailyLimit,
             sendIntervalSeconds: g.sendIntervalSeconds,
             sendMaxRecipients: g.sendMaxRecipients,
+            sendTransport: g.sendTransport,
             emailCount: g._count.emails,
             createdAt: g.createdAt,
             updatedAt: g.updatedAt,
@@ -83,6 +84,7 @@ export const groupService = {
                 sendDailyLimit: input.sendDailyLimit,
                 sendIntervalSeconds: input.sendIntervalSeconds,
                 sendMaxRecipients: input.sendMaxRecipients,
+                sendTransport: input.sendTransport,
             },
         });
     },

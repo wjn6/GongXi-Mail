@@ -1,6 +1,6 @@
 /**
- * Graph 发信池：按分组配置挑选发件账号、调用 Graph 发信、处理失败冷却与换号重试。
- * 被 Resend 兼容接口（同步单封 / 排队批量）与后台测试发信共用。
+ * 发信池：按分组配置挑选发件账号，按分组发信通道（Graph / SMTP）发出，处理失败冷却、换通道与换号重试。
+ * 被 Resend 兼容接口（同步单封 / 排队批量）、后台在线发信与测试发信共用。
  */
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma.js';
@@ -15,6 +15,17 @@ import {
     type SendFailure,
     type SendFailureKind,
 } from '../../lib/send-mail.js';
+import {
+    buildSmtpMessage,
+    classifySmtpSendError,
+    effectiveSendCapability,
+    normalizeSendTransport,
+    resolveChannelOrder,
+    shouldTryNextChannel,
+    type CapabilityValue,
+    type SendChannel,
+    type SendTransportUsed,
+} from '../../lib/smtp-send.js';
 
 /** 单封邮件最多尝试的账号数 */
 const MAX_ACCOUNT_ATTEMPTS = 3;
@@ -22,6 +33,21 @@ const MAX_ACCOUNT_ATTEMPTS = 3;
 const TOKEN_FAILURE_COOLDOWN_SECONDS = 10 * 60;
 
 const DB_NOW = Prisma.sql`(now() AT TIME ZONE 'UTC')`;
+
+/**
+ * 账号在所在分组发信通道下的有效发信能力（SQL 表达式，返回文本 ALLOWED / DENIED / UNKNOWN）。
+ * 要求查询中 email_accounts 别名为 a、email_groups 别名为 g（可为 LEFT JOIN，未分组按 AUTO）。
+ * 与 lib/smtp-send.ts 的 effectiveSendCapability 一致。
+ */
+export const EFFECTIVE_SEND_CAPABILITY_SQL = Prisma.sql`(CASE COALESCE(g.send_transport::text, 'AUTO')
+    WHEN 'GRAPH' THEN a.send_capability::text
+    WHEN 'SMTP' THEN a.smtp_capability::text
+    ELSE CASE
+        WHEN a.send_capability = 'ALLOWED' OR a.smtp_capability = 'ALLOWED' THEN 'ALLOWED'
+        WHEN a.send_capability = 'DENIED' AND a.smtp_capability = 'DENIED' THEN 'DENIED'
+        ELSE 'UNKNOWN'
+    END
+END)`;
 
 export interface SendScope {
     allowedGroupIds?: number[];
@@ -38,7 +64,7 @@ export type NoSenderReason =
     | 'RATE_LIMITED';
 
 export type SendOutcome =
-    | { ok: true; logId: string; accountId: number; fromAddress: string; attempts: number }
+    | { ok: true; logId: string; accountId: number; fromAddress: string; attempts: number; transport: SendTransportUsed }
     | {
         ok: false;
         logId: string;
@@ -57,9 +83,11 @@ interface PickedAccount {
     email: string;
     clientId: string;
     refreshToken: string;
-    sendCapability: 'UNKNOWN' | 'ALLOWED' | 'DENIED';
+    sendCapability: CapabilityValue;
+    smtpCapability: CapabilityValue;
     groupId: number | null;
     oauthTenant: string | null;
+    sendTransport: string | null;
 }
 
 interface PickOptions {
@@ -95,7 +123,7 @@ async function pickAndReserveSender(logId: string, options: PickOptions): Promis
         const conditions: Prisma.Sql[] = [
             Prisma.sql`a.status = 'ACTIVE'`,
             Prisma.sql`g.send_enabled = true`,
-            Prisma.sql`a.send_capability <> 'DENIED'`,
+            Prisma.sql`${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED'`,
             Prisma.sql`(a.send_cooldown_until IS NULL OR a.send_cooldown_until <= ${DB_NOW})`,
             Prisma.sql`(a.last_sent_at IS NULL OR a.last_sent_at <= ${DB_NOW} - make_interval(secs => g.send_interval_seconds))`,
             Prisma.sql`g.send_max_recipients >= ${options.recipientCount}`,
@@ -111,8 +139,9 @@ async function pickAndReserveSender(logId: string, options: PickOptions): Promis
 
         const rows = await tx.$queryRaw<PickedAccount[]>`
             SELECT a.id, a.email, a.client_id AS "clientId", a.refresh_token AS "refreshToken",
-                   a.send_capability::text AS "sendCapability", a.group_id AS "groupId",
-                   g.oauth_tenant::text AS "oauthTenant"
+                   a.send_capability::text AS "sendCapability", a.smtp_capability::text AS "smtpCapability",
+                   a.group_id AS "groupId",
+                   g.oauth_tenant::text AS "oauthTenant", g.send_transport::text AS "sendTransport"
             FROM email_accounts a
             JOIN email_groups g ON g.id = a.group_id
             WHERE ${Prisma.join(conditions, ' AND ')}
@@ -169,10 +198,10 @@ async function diagnoseNoSender(options: PickOptions): Promise<{ reason: NoSende
     const [row] = await prisma.$queryRaw<DiagnoseRow[]>`
         SELECT
             count(*)::int AS total,
-            count(*) FILTER (WHERE a.send_capability <> 'DENIED')::int AS capable,
-            count(*) FILTER (WHERE a.send_capability <> 'DENIED' AND g.send_max_recipients >= ${options.recipientCount})::int AS "fitRecipients",
+            count(*) FILTER (WHERE ${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED')::int AS capable,
+            count(*) FILTER (WHERE ${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED' AND g.send_max_recipients >= ${options.recipientCount})::int AS "fitRecipients",
             count(*) FILTER (
-                WHERE a.send_capability <> 'DENIED'
+                WHERE ${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED'
                   AND g.send_max_recipients >= ${options.recipientCount}
                   AND ${SENT_24H} < g.send_daily_limit
             )::int AS "underQuota",
@@ -199,7 +228,7 @@ async function diagnoseNoSender(options: PickOptions): Promise<{ reason: NoSende
     if (row.capable === 0) {
         return {
             reason: 'NO_PERMISSION',
-            message: 'None of the available sending accounts have the Microsoft Graph Mail.Send permission.',
+            message: 'None of the available sending accounts can send: Microsoft Graph needs the Mail.Send permission, SMTP needs the SMTP.Send permission with SMTP AUTH enabled for the mailbox.',
             retryable: false,
         };
     }
@@ -225,45 +254,119 @@ async function diagnoseNoSender(options: PickOptions): Promise<{ reason: NoSende
     };
 }
 
-async function applyFailureToAccount(accountId: number, failure: SendFailure) {
+/**
+ * 把一次失败记到账号上：markDenied 时把对应通道标记为不可发信；applyCooldown 时按失败类型冷却。
+ * channel 为 null 表示与通道无关（如解密失败）。
+ */
+async function applyFailureToAccount(accountId: number, failure: SendFailure, channel: SendChannel | null, applyCooldown: boolean = true) {
     const data: Prisma.EmailAccountUpdateInput = {
         sendErrorMessage: `${failure.graphCode}: ${failure.message}`.slice(0, 1000),
     };
-    if (failure.markDenied) {
-        data.sendCapability = 'DENIED';
+    if (failure.markDenied && channel) {
+        if (channel === 'SMTP') {
+            data.smtpCapability = 'DENIED';
+        } else {
+            data.sendCapability = 'DENIED';
+        }
         data.sendCheckedAt = new Date();
     }
-    if (failure.cooldownSeconds > 0) {
+    if (applyCooldown && failure.cooldownSeconds > 0) {
         data.sendCooldownUntil = new Date(Date.now() + failure.cooldownSeconds * 1000);
     }
     await prisma.emailAccount.update({ where: { id: accountId }, data });
-}
-
-function decryptRefreshToken(account: PickedAccount): string {
-    return decrypt(account.refreshToken);
 }
 
 function isRetryableKind(kind: SendFailureKind): boolean {
     return kind === 'THROTTLED' || kind === 'BLOCKED' || kind === 'TRANSIENT' || kind === 'AUTH';
 }
 
+type AttemptAccount = Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'sendCapability' | 'smtpCapability' | 'oauthTenant' | 'sendTransport'>;
+type SendCredentials = Parameters<typeof mailService.getGraphSendToken>[0];
+type ChannelResult = { ok: true } | { ok: false; failure: SendFailure };
+
+function tokenFailure(code: string, message: string): SendFailure {
+    return {
+        kind: 'AUTH', cooldownSeconds: TOKEN_FAILURE_COOLDOWN_SECONDS, retryOtherAccount: true, markDenied: false,
+        graphCode: code, message,
+    };
+}
+
+/** Graph：获取令牌 → 检查 Mail.Send → POST /me/sendMail（自定义发件人名称会被微软忽略） */
+async function attemptGraph(account: AttemptAccount, credentials: SendCredentials, request: NormalizedSendRequest): Promise<ChannelResult> {
+    const token = await mailService.getGraphSendToken(credentials);
+    if ('error' in token) {
+        return { ok: false, failure: tokenFailure('TOKEN_FAILED', token.error) };
+    }
+    if (!token.hasMailSend) {
+        return {
+            ok: false,
+            failure: {
+                kind: 'PERMISSION', cooldownSeconds: 0, retryOtherAccount: true, markDenied: true,
+                graphCode: 'MAIL_SEND_SCOPE_MISSING', message: 'Access token does not include the Mail.Send permission',
+            },
+        };
+    }
+
+    const result = await mailService.sendMailViaGraph(token.accessToken, buildGraphSendPayload(request, account.email));
+    if (result.ok) {
+        return { ok: true };
+    }
+    const failure = classifyGraphSendError(result.status, result.bodyText, result.retryAfter);
+    if (failure.kind === 'AUTH') {
+        // 令牌可能已失效，清除缓存以便下次重新获取
+        await mailService.clearGraphSendToken(account.email);
+    }
+    logger.warn({ accountId: account.id, kind: failure.kind, code: failure.graphCode }, 'Graph sendMail failed');
+    return { ok: false, failure };
+}
+
+/** SMTP：获取令牌 → 检查 SMTP.Send → smtp-mail.outlook.com:587 XOAUTH2 提交（保留发件人名称） */
+async function attemptSmtp(account: AttemptAccount, credentials: SendCredentials, request: NormalizedSendRequest): Promise<ChannelResult> {
+    const token = await mailService.getSmtpSendToken(credentials);
+    if ('error' in token) {
+        return { ok: false, failure: tokenFailure('SMTP_TOKEN_FAILED', token.error) };
+    }
+    if (!token.hasSmtpSend) {
+        return {
+            ok: false,
+            failure: {
+                kind: 'PERMISSION', cooldownSeconds: 0, retryOtherAccount: true, markDenied: true,
+                graphCode: 'SMTP_SEND_SCOPE_MISSING', message: 'Access token does not include the SMTP.Send permission',
+            },
+        };
+    }
+
+    const result = await mailService.sendMailViaSmtp(
+        token.accessToken,
+        { email: account.email, oauthTenant: account.oauthTenant },
+        buildSmtpMessage(request, account.email)
+    );
+    if (result.ok) {
+        return { ok: true };
+    }
+    const failure = classifySmtpSendError(result.error);
+    if (failure.kind === 'AUTH' || failure.kind === 'PERMISSION') {
+        await mailService.clearSmtpSendToken(account.email);
+    }
+    logger.warn({ accountId: account.id, kind: failure.kind, code: failure.graphCode }, 'SMTP send failed');
+    return { ok: false, failure };
+}
+
 /**
- * 用指定账号尝试发出一次（获取令牌 → 检查 Mail.Send → 调用 Graph）。
+ * 用指定账号尝试发出一次：按分组发信通道依次尝试 SMTP / Graph。
+ * 某通道因权限、令牌或连接问题失败时改用另一通道；成功时之前失败的通道只记录权限结果，不让账号进入冷却。
  */
 async function attemptWithAccount(
-    account: Pick<PickedAccount, 'id' | 'email' | 'clientId' | 'refreshToken' | 'sendCapability' | 'oauthTenant'>,
+    account: AttemptAccount,
     request: NormalizedSendRequest
-): Promise<{ ok: true } | { ok: false; failure: SendFailure }> {
+): Promise<{ ok: true; transport: SendTransportUsed } | { ok: false; failure: SendFailure; transport: SendChannel | null }> {
     let refreshToken: string;
     try {
-        refreshToken = decryptRefreshToken(account as PickedAccount);
+        refreshToken = decrypt(account.refreshToken);
     } catch {
-        const failure: SendFailure = {
-            kind: 'AUTH', cooldownSeconds: TOKEN_FAILURE_COOLDOWN_SECONDS, retryOtherAccount: true, markDenied: false,
-            graphCode: 'DECRYPT_FAILED', message: 'Failed to decrypt refresh token',
-        };
-        await applyFailureToAccount(account.id, failure);
-        return { ok: false, failure };
+        const failure: SendFailure = tokenFailure('DECRYPT_FAILED', 'Failed to decrypt refresh token');
+        await applyFailureToAccount(account.id, failure, null);
+        return { ok: false, failure, transport: null };
     }
 
     const credentials = {
@@ -273,62 +376,60 @@ async function attemptWithAccount(
         refreshToken,
         autoAssigned: false,
         oauthTenant: account.oauthTenant,
-    };
+    } as SendCredentials;
 
-    const token = await mailService.getGraphSendToken(credentials as Parameters<typeof mailService.getGraphSendToken>[0]);
-    if ('error' in token) {
-        const failure: SendFailure = {
-            kind: 'AUTH', cooldownSeconds: TOKEN_FAILURE_COOLDOWN_SECONDS, retryOtherAccount: true, markDenied: false,
-            graphCode: 'TOKEN_FAILED', message: token.error,
-        };
-        await applyFailureToAccount(account.id, failure);
-        return { ok: false, failure };
-    }
-    if (!token.hasMailSend) {
-        const failure: SendFailure = {
-            kind: 'PERMISSION', cooldownSeconds: 0, retryOtherAccount: true, markDenied: true,
-            graphCode: 'MAIL_SEND_SCOPE_MISSING', message: 'Access token does not include the Mail.Send permission',
-        };
-        await applyFailureToAccount(account.id, failure);
-        return { ok: false, failure };
+    const mode = normalizeSendTransport(account.sendTransport);
+    const order = resolveChannelOrder(mode, !!request.fromName, { graph: account.sendCapability, smtp: account.smtpCapability });
+    const failures: Array<{ channel: SendChannel; failure: SendFailure }> = [];
+
+    for (const channel of order) {
+        const result = channel === 'SMTP'
+            ? await attemptSmtp(account, credentials, request)
+            : await attemptGraph(account, credentials, request);
+
+        if (result.ok) {
+            for (const item of failures) {
+                await applyFailureToAccount(account.id, item.failure, item.channel, false);
+            }
+            const previous = channel === 'SMTP' ? account.smtpCapability : account.sendCapability;
+            await prisma.emailAccount.update({
+                where: { id: account.id },
+                data: {
+                    ...(channel === 'SMTP' ? { smtpCapability: 'ALLOWED' as const } : { sendCapability: 'ALLOWED' as const }),
+                    ...(previous !== 'ALLOWED' ? { sendCheckedAt: new Date() } : {}),
+                    ...(failures.length === 0 ? { sendErrorMessage: null } : {}),
+                },
+            });
+            // 自动模式下填了发件人名称却走了 Graph：名称不会生效，记录下来便于排查
+            const transport: SendTransportUsed = channel === 'GRAPH' && mode === 'AUTO' && request.fromName ? 'GRAPH_FALLBACK' : channel;
+            return { ok: true, transport };
+        }
+
+        failures.push({ channel, failure: result.failure });
+        if (!shouldTryNextChannel(result.failure)) {
+            break;
+        }
     }
 
-    const payload = buildGraphSendPayload(request, account.email);
-    const result = await mailService.sendMailViaGraph(token.accessToken, payload);
-    if (result.ok) {
-        await prisma.emailAccount.update({
-            where: { id: account.id },
-            data: {
-                sendCapability: 'ALLOWED',
-                ...(account.sendCapability !== 'ALLOWED' ? { sendCheckedAt: new Date() } : {}),
-                sendErrorMessage: null,
-            },
-        });
-        return { ok: true };
+    // 全部失败：最后一次失败决定账号冷却，其余只记录权限结果；请求本身的错误不影响账号
+    const last = failures[failures.length - 1];
+    for (const item of failures) {
+        if (item.failure.kind === 'REQUEST') continue;
+        await applyFailureToAccount(account.id, item.failure, item.channel, item === last);
     }
-
-    const failure = classifyGraphSendError(result.status, result.bodyText, result.retryAfter);
-    if (failure.kind === 'AUTH') {
-        // 令牌可能已失效，清除缓存以便下次重新获取
-        await mailService.clearGraphSendToken(account.email);
-    }
-    if (failure.kind !== 'REQUEST') {
-        await applyFailureToAccount(account.id, failure);
-    }
-    logger.warn({ accountId: account.id, kind: failure.kind, code: failure.graphCode }, 'Graph sendMail failed');
-    return { ok: false, failure };
+    return { ok: false, failure: last.failure, transport: last.channel };
 }
 
-async function markLogSent(logId: string) {
+async function markLogSent(logId: string, transport: SendTransportUsed) {
     await prisma.$executeRaw`
         UPDATE send_logs
         SET status = 'SENT', sent_at = ${DB_NOW}, locked_at = NULL, next_attempt_at = NULL,
-            error_code = NULL, error_message = NULL
+            error_code = NULL, error_message = NULL, transport = ${transport}
         WHERE id = ${logId}::uuid
     `;
 }
 
-async function markLogFailed(logId: string, code: string, message: string) {
+async function markLogFailed(logId: string, code: string, message: string, transport: SendChannel | null = null) {
     await prisma.sendLog.update({
         where: { id: logId },
         data: {
@@ -337,6 +438,7 @@ async function markLogFailed(logId: string, code: string, message: string) {
             errorMessage: message.slice(0, 2000),
             lockedAt: null,
             nextAttemptAt: null,
+            ...(transport ? { transport } : {}),
         },
     });
 }
@@ -357,6 +459,7 @@ export async function sendFromPool(
 ): Promise<SendOutcome> {
     const excludeIds: number[] = [];
     let lastFailure: SendFailure | null = null;
+    let lastTransport: SendChannel | null = null;
     let attempts = 0;
 
     while (attempts < MAX_ACCOUNT_ATTEMPTS) {
@@ -383,11 +486,12 @@ export async function sendFromPool(
         excludeIds.push(account.id);
         const result = await attemptWithAccount(account, request);
         if (result.ok) {
-            await markLogSent(logId);
-            return { ok: true, logId, accountId: account.id, fromAddress: account.email, attempts };
+            await markLogSent(logId, result.transport);
+            return { ok: true, logId, accountId: account.id, fromAddress: account.email, attempts, transport: result.transport };
         }
 
         lastFailure = result.failure;
+        lastTransport = result.transport;
         if (!result.failure.retryOtherAccount || options.preferredAddress) {
             break;
         }
@@ -395,7 +499,7 @@ export async function sendFromPool(
 
     const failure = lastFailure!;
     if (options.markFailed !== false || !isRetryableKind(failure.kind)) {
-        await markLogFailed(logId, failure.graphCode, failure.message);
+        await markLogFailed(logId, failure.graphCode, failure.message, lastTransport);
     }
     return {
         ok: false, logId, attempts, noAttempt: false,
@@ -412,7 +516,7 @@ export async function getPoolCapacity(scope: SendScope): Promise<{ senders: numb
     const conditions: Prisma.Sql[] = [
         Prisma.sql`a.status = 'ACTIVE'`,
         Prisma.sql`g.send_enabled = true`,
-        Prisma.sql`a.send_capability <> 'DENIED'`,
+        Prisma.sql`${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED'`,
         ...scopeConditions(scope),
     ];
     const [row] = await prisma.$queryRaw<Array<{ senders: number; maxRecipients: number | null }>>`
@@ -445,8 +549,8 @@ export async function sendWithAccount(logId: string, accountId: number, request:
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
         select: {
-            id: true, email: true, clientId: true, refreshToken: true, sendCapability: true, groupId: true,
-            group: { select: { oauthTenant: true } },
+            id: true, email: true, clientId: true, refreshToken: true, sendCapability: true, smtpCapability: true, groupId: true,
+            group: { select: { oauthTenant: true, sendTransport: true } },
         },
     });
     if (!account) {
@@ -462,63 +566,104 @@ export async function sendWithAccount(logId: string, accountId: number, request:
         WHERE id = ${logId}::uuid
     `;
 
-    const result = await attemptWithAccount({ ...account, oauthTenant: account.group?.oauthTenant ?? null }, request);
+    const result = await attemptWithAccount({
+        ...account,
+        oauthTenant: account.group?.oauthTenant ?? null,
+        sendTransport: account.group?.sendTransport ?? null,
+    }, request);
     if (result.ok) {
-        await markLogSent(logId);
-        return { ok: true, logId, accountId: account.id, fromAddress: account.email, attempts: 1 };
+        await markLogSent(logId, result.transport);
+        return { ok: true, logId, accountId: account.id, fromAddress: account.email, attempts: 1, transport: result.transport };
     }
-    await markLogFailed(logId, result.failure.graphCode, result.failure.message);
+    await markLogFailed(logId, result.failure.graphCode, result.failure.message, result.transport);
     return {
         ok: false, logId, attempts: 1, noAttempt: false,
         reason: result.failure.kind, message: result.failure.message, retryable: false,
     };
 }
 
+export interface SendCheckResult {
+    id: number;
+    email: string;
+    /** 按所在分组发信通道得出的有效结果 */
+    capability: CapabilityValue;
+    graph: CapabilityValue;
+    smtp: CapabilityValue;
+    message: string;
+}
+
 /**
- * 检测账号是否具备发信权限（强制重新获取令牌并检查 Mail.Send）。
+ * 检测账号的发信能力（强制重新获取令牌）：
+ *   Graph：令牌是否包含 Mail.Send；
+ *   SMTP：令牌是否包含 SMTP.Send，并实际连接 SMTP 完成 XOAUTH2 认证（不发信），可发现邮箱禁用了 SMTP AUTH。
  */
-export async function checkSendCapability(accountId: number): Promise<{ id: number; email: string; capability: 'ALLOWED' | 'DENIED' | 'UNKNOWN'; message: string }> {
+export async function checkSendCapability(accountId: number): Promise<SendCheckResult> {
     const account = await prisma.emailAccount.findUnique({
         where: { id: accountId },
-        select: { id: true, email: true, clientId: true, refreshToken: true, group: { select: { oauthTenant: true } } },
+        select: { id: true, email: true, clientId: true, refreshToken: true, group: { select: { oauthTenant: true, sendTransport: true } } },
     });
     if (!account) {
-        return { id: accountId, email: '', capability: 'UNKNOWN', message: 'Email account not found' };
+        return { id: accountId, email: '', capability: 'UNKNOWN', graph: 'UNKNOWN', smtp: 'UNKNOWN', message: 'Email account not found' };
     }
 
     let refreshToken: string;
     try {
         refreshToken = decrypt(account.refreshToken);
     } catch {
-        return { id: account.id, email: account.email, capability: 'UNKNOWN', message: 'Failed to decrypt refresh token' };
+        return { id: account.id, email: account.email, capability: 'UNKNOWN', graph: 'UNKNOWN', smtp: 'UNKNOWN', message: 'Failed to decrypt refresh token' };
     }
 
-    const token = await mailService.getGraphSendToken(
-        { id: account.id, email: account.email, clientId: account.clientId, refreshToken, autoAssigned: false, oauthTenant: account.group?.oauthTenant } as Parameters<typeof mailService.getGraphSendToken>[0],
-        { force: true }
-    );
-    if ('error' in token) {
-        await prisma.emailAccount.update({
-            where: { id: account.id },
-            data: { sendErrorMessage: `TOKEN_FAILED: ${token.error}`.slice(0, 1000) },
-        });
-        return { id: account.id, email: account.email, capability: 'UNKNOWN', message: token.error };
+    const oauthTenant = account.group?.oauthTenant ?? null;
+    const credentials = {
+        id: account.id, email: account.email, clientId: account.clientId, refreshToken, autoAssigned: false, oauthTenant,
+    } as SendCredentials;
+    const notes: string[] = [];
+
+    let graph: CapabilityValue = 'UNKNOWN';
+    const graphToken = await mailService.getGraphSendToken(credentials, { force: true });
+    if ('error' in graphToken) {
+        notes.push(`Graph: ${graphToken.error}`);
+    } else {
+        graph = graphToken.hasMailSend ? 'ALLOWED' : 'DENIED';
+        if (!graphToken.hasMailSend) notes.push('Graph: access token does not include the Mail.Send permission');
     }
 
-    const capability = token.hasMailSend ? 'ALLOWED' : 'DENIED';
+    let smtp: CapabilityValue = 'UNKNOWN';
+    const smtpToken = await mailService.getSmtpSendToken(credentials, { force: true });
+    if ('error' in smtpToken) {
+        notes.push(`SMTP: ${smtpToken.error}`);
+    } else if (!smtpToken.hasSmtpSend) {
+        smtp = 'DENIED';
+        notes.push('SMTP: access token does not include the SMTP.Send permission');
+    } else {
+        const verify = await mailService.sendMailViaSmtp(smtpToken.accessToken, { email: account.email, oauthTenant }, null);
+        if (verify.ok) {
+            smtp = 'ALLOWED';
+        } else {
+            const failure = classifySmtpSendError(verify.error);
+            if (failure.kind === 'PERMISSION') smtp = 'DENIED';
+            if (failure.kind === 'AUTH' || failure.kind === 'PERMISSION') await mailService.clearSmtpSendToken(account.email);
+            notes.push(`SMTP: ${failure.graphCode}: ${failure.message}`);
+        }
+    }
+
     await prisma.emailAccount.update({
         where: { id: account.id },
         data: {
-            sendCapability: capability,
+            ...(graph !== 'UNKNOWN' ? { sendCapability: graph } : {}),
+            ...(smtp !== 'UNKNOWN' ? { smtpCapability: smtp } : {}),
             sendCheckedAt: new Date(),
-            sendErrorMessage: token.hasMailSend ? null : 'MAIL_SEND_SCOPE_MISSING: Access token does not include the Mail.Send permission',
+            sendErrorMessage: notes.length > 0 ? notes.join('; ').slice(0, 1000) : null,
         },
     });
+
     return {
         id: account.id,
         email: account.email,
-        capability,
-        message: token.hasMailSend ? 'OK' : 'Access token does not include the Mail.Send permission',
+        capability: effectiveSendCapability(account.group?.sendTransport, graph, smtp),
+        graph,
+        smtp,
+        message: notes.length > 0 ? notes.join('; ') : 'OK',
     };
 }
 

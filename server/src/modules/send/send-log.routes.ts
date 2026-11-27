@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma.js';
 import { AppError } from '../../plugins/error.js';
+import { EFFECTIVE_SEND_CAPABILITY_SQL } from './send.service.js';
 
 const DB_NOW = Prisma.sql`(now() AT TIME ZONE 'UTC')`;
 
@@ -24,6 +25,7 @@ interface GroupStatsRow {
     id: number;
     name: string;
     sendEnabled: boolean;
+    sendTransport: string;
     sendStrategy: string;
     sendDailyLimit: number;
     sendIntervalSeconds: number;
@@ -50,12 +52,13 @@ const sendLogRoutes: FastifyPluginAsync = async (fastify) => {
                    g.send_interval_seconds AS "sendIntervalSeconds",
                    g.send_max_recipients AS "sendMaxRecipients",
                    count(a.id) FILTER (WHERE a.status = 'ACTIVE')::int AS active,
-                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND a.send_capability = 'ALLOWED')::int AS allowed,
-                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND a.send_capability = 'DENIED')::int AS denied,
-                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND a.send_capability = 'UNKNOWN')::int AS unknown,
+                   g.send_transport::text AS "sendTransport",
+                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND ${EFFECTIVE_SEND_CAPABILITY_SQL} = 'ALLOWED')::int AS allowed,
+                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND ${EFFECTIVE_SEND_CAPABILITY_SQL} = 'DENIED')::int AS denied,
+                   count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND ${EFFECTIVE_SEND_CAPABILITY_SQL} = 'UNKNOWN')::int AS unknown,
                    count(a.id) FILTER (WHERE a.status = 'ACTIVE' AND a.send_cooldown_until > ${DB_NOW})::int AS cooling,
                    COALESCE(sum(GREATEST(g.send_daily_limit - COALESCE(s.sent, 0), 0))
-                       FILTER (WHERE a.status = 'ACTIVE' AND a.send_capability <> 'DENIED'), 0)::int AS remaining,
+                       FILTER (WHERE a.status = 'ACTIVE' AND ${EFFECTIVE_SEND_CAPABILITY_SQL} <> 'DENIED'), 0)::int AS remaining,
                    COALESCE(sum(s.sent), 0)::int AS "sent24h"
             FROM email_groups g
             LEFT JOIN email_accounts a ON a.group_id = g.id
@@ -120,6 +123,7 @@ const sendLogRoutes: FastifyPluginAsync = async (fastify) => {
                     recipientCount: true,
                     attachmentCount: true,
                     attempts: true,
+                    transport: true,
                     errorCode: true,
                     errorMessage: true,
                     batchId: true,

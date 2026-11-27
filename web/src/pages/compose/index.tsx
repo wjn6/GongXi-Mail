@@ -457,7 +457,11 @@ const ComposePage: React.FC = () => {
             const result = res.data;
             setLastResult(result);
             if (result.sent) {
-                message.success(`已由 ${result.fromAddress} 发出`);
+                if (result.transport === 'GRAPH_FALLBACK') {
+                    message.warning(`已由 ${result.fromAddress} 发出，但 SMTP 不可用、改用了 Graph，发件人名称不会生效`);
+                } else {
+                    message.success(`已由 ${result.fromAddress} 通过 ${result.transport === 'SMTP' ? 'SMTP' : 'Graph'} 发出`);
+                }
                 window.clearTimeout(draftTimerRef.current);
                 form.setFieldsValue({ to: [], cc: [], bcc: [], replyTo: [], subject: '', html: '', text: '' });
                 setAttachments([]);
@@ -720,7 +724,11 @@ const ComposePage: React.FC = () => {
                             </Form.Item>
                         )}
 
-                        <Form.Item name="fromName" label="发件人显示名" extra="收件人看到的名称；发件地址始终是实际发信的账号">
+                        <Form.Item
+                            name="fromName"
+                            label="发件人显示名"
+                            extra="收件人看到的名称，发件地址始终是实际发信的账号。分组发信通道为「自动」或「仅 SMTP」时通过 SMTP 发出以保留名称；「仅 Graph」时微软会改用账号资料里的名字"
+                        >
                             <Input placeholder="例如：Acme 团队（可选）" maxLength={100} allowClear />
                         </Form.Item>
 

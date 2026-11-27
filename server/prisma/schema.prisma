@@ -75,6 +75,8 @@ model EmailGroup {
   sendDailyLimit      Int          @default(30) @map("send_daily_limit")
   sendIntervalSeconds Int          @default(60) @map("send_interval_seconds")
   sendMaxRecipients   Int          @default(10) @map("send_max_recipients")
+  // 发信通道：AUTO 填了发件人名称时走 SMTP（Graph 会忽略自定义名称），否则走 Graph；通道不可用时互为备用
+  sendTransport       SendTransport @default(AUTO) @map("send_transport")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -104,6 +106,8 @@ model EmailAccount {
   lastSentAt        DateTime?      @map("last_sent_at")
   sendCooldownUntil DateTime?      @map("send_cooldown_until")
   sendErrorMessage  String?        @map("send_error_message") @db.Text
+  // SMTP 发信（OAuth XOAUTH2）能力：令牌含 SMTP.Send 且邮箱未禁用 SMTP AUTH
+  smtpCapability    SendCapability @default(UNKNOWN) @map("smtp_capability")
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
@@ -210,6 +214,8 @@ model SendLog {
   attachmentCount  Int        @default(0) @map("attachment_count")
   attachmentBytes  Int        @default(0) @map("attachment_bytes")
   attempts         Int        @default(0)
+  // 实际使用的发信通道：GRAPH / SMTP / GRAPH_FALLBACK（SMTP 不可用改用 Graph，发件人名称不生效）
+  transport        String?    @db.VarChar(20)
   errorCode        String?    @map("error_code") @db.VarChar(64)
   errorMessage     String?    @map("error_message") @db.Text
   batchId          String?    @map("batch_id") @db.Uuid
@@ -309,6 +315,12 @@ enum IdempotencyStatus {
 enum EmailUsageStatus {
   CLAIMED
   COMPLETED
+}
+
+enum SendTransport {
+  AUTO
+  GRAPH
+  SMTP
 }
 
 enum OAuthTenant {
