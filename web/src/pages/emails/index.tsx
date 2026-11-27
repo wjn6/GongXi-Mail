@@ -686,7 +686,7 @@ const EmailsPage: React.FC = () => {
         setEditingGroupId(group.id);
         groupForm.setFieldsValue({
             name: group.name,
-            description: group.description,
+            description: group.description ?? '',
             fetchStrategy: group.fetchStrategy,
             oauthTenant: group.oauthTenant ?? 'CONSUMERS',
             sendEnabled: group.sendEnabled ?? SEND_GROUP_DEFAULTS.sendEnabled,

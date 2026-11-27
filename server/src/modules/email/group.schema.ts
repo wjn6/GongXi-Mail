@@ -15,6 +15,15 @@ export const oauthTenantSchema = z.enum(['CONSUMERS', 'ORGANIZATIONS', 'COMMON']
 /** 发信通道：AUTO 填了发件人名称时走 SMTP（保留名称），否则走 Graph，互为备用；GRAPH / SMTP 只用该通道 */
 export const sendTransportSchema = z.enum(['AUTO', 'GRAPH', 'SMTP']);
 
+/**
+ * 分组描述：前端编辑没有描述的分组时会传 null，清空输入框时传空字符串；两者都表示“无描述”，存为 null。
+ */
+const descriptionSchema = z
+    .string()
+    .max(255)
+    .nullish()
+    .transform((value) => (typeof value === 'string' ? value.trim() || null : value));
+
 const sendSettingsSchema = {
     sendEnabled: z.boolean(),
     sendStrategy: sendStrategySchema,
@@ -26,7 +35,7 @@ const sendSettingsSchema = {
 
 export const createGroupSchema = z.object({
     name: z.string().min(1).max(50),
-    description: z.string().max(255).optional(),
+    description: descriptionSchema,
     fetchStrategy: mailFetchStrategySchema.default('GRAPH_FIRST'),
     oauthTenant: oauthTenantSchema.default('CONSUMERS'),
     sendEnabled: sendSettingsSchema.sendEnabled.optional(),
@@ -39,7 +48,7 @@ export const createGroupSchema = z.object({
 
 export const updateGroupSchema = z.object({
     name: z.string().min(1).max(50).optional(),
-    description: z.string().max(255).optional(),
+    description: descriptionSchema,
     fetchStrategy: mailFetchStrategySchema.optional(),
     oauthTenant: oauthTenantSchema.optional(),
     sendEnabled: sendSettingsSchema.sendEnabled.optional(),
