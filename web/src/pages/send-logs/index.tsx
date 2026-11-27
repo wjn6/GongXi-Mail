@@ -17,7 +17,8 @@ import {
     Statistic,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { FormOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { PageHeader } from '../../components';
 import { groupApi, sendApi } from '../../api';
@@ -100,7 +101,7 @@ const STATUS_META: Record<SendStatus, { color: string; label: string }> = {
 
 const SOURCE_LABELS: Record<SendSource, string> = {
     RESEND: 'Resend 接口',
-    ADMIN: '后台测试',
+    ADMIN: '后台发信',
 };
 
 const formatTime = (val: string | null | undefined) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-');
@@ -119,6 +120,9 @@ const renderStatus = (record: Pick<SendLogItem, 'status' | 'errorCode' | 'errorM
 
 const SendLogsPage: React.FC = () => {
     const isMobile = useIsMobile();
+    const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const linkedId = searchParams.get('id');
     const [loading, setLoading] = useState(false);
     const [logs, setLogs] = useState<SendLogItem[]>([]);
     const [total, setTotal] = useState(0);
@@ -168,13 +172,22 @@ const SendLogsPage: React.FC = () => {
         return () => window.clearTimeout(timer);
     }, [fetchStats]);
 
-    const openDetail = async (id: string) => {
+    const openDetail = useCallback(async (id: string) => {
         setDetailLoading(true);
         setDetail({ id } as SendLogDetail);
         const result = await requestData<SendLogDetail>(() => sendApi.getLog(id), '获取详情失败');
         setDetail(result);
         setDetailLoading(false);
-    };
+    }, []);
+
+    // 从在线发信页跳转过来时（?id=）直接打开详情
+    useEffect(() => {
+        if (!linkedId) return undefined;
+        const timer = window.setTimeout(() => {
+            void openDetail(linkedId);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [linkedId, openDetail]);
 
     const handleRefresh = () => {
         void fetchLogs();
@@ -313,8 +326,13 @@ const SendLogsPage: React.FC = () => {
         <div>
             <PageHeader
                 title="发信记录"
-                subtitle="Resend 兼容接口与后台测试发信的记录；「已提交」表示 Microsoft Graph 已接收，是否送达以收件方为准"
-                extra={<Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>}
+                subtitle="Resend 兼容接口与后台在线发信、测试发信的记录；「已提交」表示 Microsoft Graph 已接收，是否送达以收件方为准"
+                extra={(
+                    <>
+                        <Button type="primary" icon={<FormOutlined />} onClick={() => navigate('/compose')}>写邮件</Button>
+                        <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新</Button>
+                    </>
+                )}
             />
 
             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, 1fr)' : 'repeat(3, minmax(0, 220px))', gap: 12, marginBottom: 16 }}>
@@ -406,7 +424,10 @@ const SendLogsPage: React.FC = () => {
             <Drawer
                 title="发信详情"
                 open={!!detail}
-                onClose={() => setDetail(null)}
+                onClose={() => {
+                    setDetail(null);
+                    if (linkedId) setSearchParams({}, { replace: true });
+                }}
                 size={isMobile ? window.innerWidth : 640}
                 destroyOnHidden
             >

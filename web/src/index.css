@@ -95,6 +95,46 @@ body {
   background: #f0f7ff;
 }
 
+/* 在线发信：宽屏时右侧固定发送摘要，窄屏上下排列 */
+.gx-compose-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (min-width: 1200px) {
+  .gx-compose-grid {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+
+  .gx-compose-side {
+    position: sticky;
+    top: 72px;
+  }
+
+  .gx-compose-bar {
+    display: none !important;
+  }
+}
+
+.gx-compose-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(6px);
+  border: 1px solid #f0f0f0;
+  border-radius: 10px;
+  box-shadow: 0 -4px 16px rgba(15, 35, 95, 0.06);
+}
+
 /* ============ 手机端适配 ============ */
 @media (max-width: 767.98px) {
   .gx-hide-mobile {
