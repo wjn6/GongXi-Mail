@@ -52,6 +52,15 @@ void test('classifies account-level AADSTS codes', () => {
     assert.equal(parseOAuthTokenError(400, body('invalid_request', 9002313, 'Malformed.')).kind, 'UNKNOWN');
 });
 
+void test('recognizes accounts suspended for abuse despite AADSTS70000', () => {
+    const failure = parseOAuthTokenError(400, body('invalid_grant', 70000, 'User account is found to be in service abuse mode.'));
+    assert.equal(failure.kind, 'ACCOUNT_SUSPENDED');
+    assert.equal(failure.aadsts, 'AADSTS70000');
+    assert.match(formatOAuthFailure(failure), /^Microsoft has suspended this account/);
+    assert.match(formatOAuthFailure(failure), /service abuse mode/);
+    assert.equal(tokenFailureToFetchFailure('graph', failure).code, 'MS_ACCOUNT_SUSPENDED');
+});
+
 void test('handles non-JSON responses and network errors', () => {
     const html = parseOAuthTokenError(503, '<html>Service Unavailable</html>');
     assert.equal(html.kind, 'UNKNOWN');

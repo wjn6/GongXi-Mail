@@ -234,6 +234,7 @@ curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
 | `REFRESH_TOKEN_INVALID` | 502 | 刷新令牌无效、过期、被吊销或与客户端 ID 不匹配（如 AADSTS70000），需要重新授权 |
 | `ACCOUNT_ACTION_REQUIRED` / `CONSENT_REQUIRED` | 502 | 微软要求交互登录（二次验证等） / 应用未获授权 |
 | `CLIENT_ID_INVALID` / `MS_ACCOUNT_UNAVAILABLE` | 502 | 客户端 ID 无效 / 微软账号不存在、被禁用或锁定 |
+| `MS_ACCOUNT_SUSPENDED` | 502 | 微软因疑似滥用暂停了账号（AADSTS70000 "service abuse mode"），需登录 outlook.live.com 验证解封 |
 | `GRAPH_TOKEN_FAILED` / `GRAPH_SCOPE_MISSING` / `IMAP_TOKEN_FAILED` | 502 | 获取访问令牌失败（其它原因，message 带微软原因）或缺少权限 |
 | `GRAPH_FETCH_FAILED` / `IMAP_FETCH_FAILED` | 502 | 拿到令牌后读取邮件失败 |
 | `MAILBOX_CLEAR_UNSUPPORTED` | 400 | 分组策略为 `IMAP_ONLY`，不能清空 |

@@ -13,6 +13,7 @@ export type OAuthFailureKind =
     | 'CONSENT_REQUIRED'
     | 'CLIENT_INVALID'
     | 'ACCOUNT_UNAVAILABLE'
+    | 'ACCOUNT_SUSPENDED'
     | 'NETWORK'
     | 'UNKNOWN';
 
@@ -35,6 +36,11 @@ const CLIENT_CODES = new Set(['700016', '7000218']);
 /** 登录端点与应用支持的账号类型不一致（如只支持个人账号的应用请求了 /common） */
 const TENANT_MISMATCH_CODES = new Set(['9002331', '50194', '9002346', '500207']);
 const ACCOUNT_CODES = new Set(['50034', '50053', '50057']);
+/**
+ * 微软因疑似滥用（多为发信被判定为垃圾邮件）暂停了账号。微软仍返回 invalid_grant AADSTS70000，
+ * 但描述为 "User account is found to be in service abuse mode."，重新授权无法解决，需要先登录解封。
+ */
+const ACCOUNT_SUSPENDED_RE = /service abuse mode|account (?:is |has been )?(?:temporarily )?suspended/i;
 
 /** 账号层面的失败 → 对外错误码 */
 export const ACCOUNT_LEVEL_ERROR_CODES: Record<Exclude<OAuthFailureKind, 'NETWORK' | 'UNKNOWN'>, string> = {
@@ -44,6 +50,7 @@ export const ACCOUNT_LEVEL_ERROR_CODES: Record<Exclude<OAuthFailureKind, 'NETWOR
     CONSENT_REQUIRED: 'CONSENT_REQUIRED',
     CLIENT_INVALID: 'CLIENT_ID_INVALID',
     ACCOUNT_UNAVAILABLE: 'MS_ACCOUNT_UNAVAILABLE',
+    ACCOUNT_SUSPENDED: 'MS_ACCOUNT_SUSPENDED',
 };
 
 const ACCOUNT_LEVEL_HINTS: Record<keyof typeof ACCOUNT_LEVEL_ERROR_CODES, string> = {
@@ -53,6 +60,7 @@ const ACCOUNT_LEVEL_HINTS: Record<keyof typeof ACCOUNT_LEVEL_ERROR_CODES, string
     CONSENT_REQUIRED: 'The app has not been granted the required permissions for this account; re-authorize it',
     CLIENT_INVALID: 'The client ID is wrong for this refresh token, or the app cannot be used with this account',
     ACCOUNT_UNAVAILABLE: 'The Microsoft account does not exist, is disabled or is locked',
+    ACCOUNT_SUSPENDED: 'Microsoft has suspended this account for suspected abuse (usually outbound spam); sign in at outlook.live.com and complete the verification to unlock it, then refresh the token again (re-authorize only if it still fails)',
 };
 
 const ACCOUNT_LEVEL_CODE_SET = new Set(Object.values(ACCOUNT_LEVEL_ERROR_CODES));
@@ -65,7 +73,7 @@ function isAccountLevelKind(kind: OAuthFailureKind): kind is keyof typeof ACCOUN
     return kind !== 'NETWORK' && kind !== 'UNKNOWN';
 }
 
-/** 是否为账号层面的失败（令牌失效、需要交互登录、未授权、客户端 ID 不对、账号不可用） */
+/** 是否为账号层面的失败（令牌失效、需要交互登录、未授权、客户端 ID 不对、账号不可用或被暂停） */
 export function isAccountLevelOAuthFailure(failure: OAuthFailure): boolean {
     return isAccountLevelKind(failure.kind);
 }
@@ -80,7 +88,8 @@ function cleanDescription(text: string): string {
         .slice(0, 240);
 }
 
-function classify(error: string, aadstsNumber: string | null): OAuthFailureKind {
+function classify(error: string, aadstsNumber: string | null, description: string): OAuthFailureKind {
+    if (ACCOUNT_SUSPENDED_RE.test(description)) return 'ACCOUNT_SUSPENDED';
     if (aadstsNumber) {
         if (TENANT_MISMATCH_CODES.has(aadstsNumber)) return 'TENANT_MISMATCH';
         if (INTERACTION_CODES.has(aadstsNumber)) return 'INTERACTION_REQUIRED';
@@ -125,7 +134,7 @@ export function parseOAuthTokenError(status: number, bodyText: string): OAuthFai
     const aadstsNumber = fromDescription ?? fromCodes;
 
     return {
-        kind: classify(error, aadstsNumber),
+        kind: classify(error, aadstsNumber, rawDescription),
         status,
         error: error || `http_${status}`,
         aadsts: aadstsNumber ? `AADSTS${aadstsNumber}` : null,

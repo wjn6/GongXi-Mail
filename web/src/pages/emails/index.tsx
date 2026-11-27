@@ -1417,11 +1417,19 @@ const EmailsPage: React.FC = () => {
                     <Form.Item name="groupId" label="所属分组">
                         <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
                     </Form.Item>
-                    <Form.Item name="status" label="状态" initialValue="ACTIVE">
-                        <Select>
-                            <Select.Option value="ACTIVE">正常</Select.Option>
-                            <Select.Option value="DISABLED">禁用</Select.Option>
-                        </Select>
+                    <Form.Item
+                        name="status"
+                        label="状态"
+                        initialValue="ACTIVE"
+                        extra="「异常」由系统在令牌或账号出问题时自动设置，刷新 Token 成功后自动恢复正常；也可手动改为正常或禁用"
+                    >
+                        <Select
+                            options={[
+                                { value: 'ACTIVE', label: '正常' },
+                                { value: 'ERROR', label: '异常（系统自动标记）', disabled: true },
+                                { value: 'DISABLED', label: '禁用' },
+                            ]}
+                        />
                     </Form.Item>
                     </Form>
                 </Spin>

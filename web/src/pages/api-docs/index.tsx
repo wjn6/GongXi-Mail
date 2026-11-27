@@ -89,6 +89,7 @@ const ACCOUNT_TOKEN_ERRORS: ApiErrorCode[] = [
   { code: 'CONSENT_REQUIRED', status: 502, desc: '应用未获得该账号的授权' },
   { code: 'CLIENT_ID_INVALID', status: 502, desc: '客户端 ID 无效或不能用于该账号' },
   { code: 'MS_ACCOUNT_UNAVAILABLE', status: 502, desc: '微软账号不存在、被禁用或被锁定' },
+  { code: 'MS_ACCOUNT_SUSPENDED', status: 502, desc: '微软因疑似滥用（多为发信被判为垃圾邮件）暂停了账号，需登录 outlook.live.com 完成验证解封' },
 ];
 
 const FETCH_ERRORS: ApiErrorCode[] = [

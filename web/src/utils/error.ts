@@ -6,6 +6,7 @@ const ERROR_CODE_HINTS: Record<string, string> = {
     CONSENT_REQUIRED: '应用未获得该账号的授权，请重新授权',
     CLIENT_ID_INVALID: '客户端 ID 无效，或不能用于该账号',
     MS_ACCOUNT_UNAVAILABLE: '微软账号不存在、已被禁用或被锁定',
+    MS_ACCOUNT_SUSPENDED: '微软因疑似滥用（多为发信被判为垃圾邮件）暂停了该账号，请先在 outlook.live.com 登录完成验证解封，再刷新 Token',
 };
 
 export function getErrorMessage(error: unknown, fallback: string): string {
