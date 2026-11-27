@@ -5,7 +5,9 @@ export interface SpaFallbackRequest {
 }
 
 export function isApiOrAdminPath(path: string): boolean {
-    return path === '/api' || path.startsWith('/api/') || path === '/admin' || path.startsWith('/admin/');
+    return path === '/api' || path.startsWith('/api/')
+        || path === '/admin' || path.startsWith('/admin/')
+        || path === '/resend' || path.startsWith('/resend/');
 }
 
 export function isAssetPath(path: string): boolean {

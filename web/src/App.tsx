@@ -14,6 +14,7 @@ const ApiKeysPage = lazy(() => import('./pages/api-keys'));
 const ApiDocsPage = lazy(() => import('./pages/api-docs'));
 const OperationLogsPage = lazy(() => import('./pages/operation-logs'));
 const SystemLogsPage = lazy(() => import('./pages/system-logs'));
+const SendLogsPage = lazy(() => import('./pages/send-logs'));
 const AdminsPage = lazy(() => import('./pages/admins'));
 const SettingsPage = lazy(() => import('./pages/settings'));
 
@@ -104,6 +105,7 @@ const App: React.FC = () => {
               <Route path="api-docs" element={withSuspense(<ApiDocsPage />)} />
               <Route path="operation-logs" element={withSuspense(<OperationLogsPage />)} />
               <Route path="system-logs" element={withSuspense(<SystemLogsPage />)} />
+              <Route path="send-logs" element={withSuspense(<SendLogsPage />)} />
               <Route
                 path="admins"
                 element={

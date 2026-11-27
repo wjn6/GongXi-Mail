@@ -22,6 +22,8 @@ import emailRoutes from './modules/email/email.routes.js';
 import groupRoutes from './modules/email/group.routes.js';
 import mailRoutes from './modules/mail/mail.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import resendRoutes from './modules/resend/resend.routes.js';
+import sendLogRoutes from './modules/send/send-log.routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -106,9 +108,13 @@ export async function buildApp() {
     await fastify.register(emailRoutes, { prefix: '/admin/emails' });
     await fastify.register(groupRoutes, { prefix: '/admin/email-groups' });
     await fastify.register(dashboardRoutes, { prefix: '/admin/dashboard' });
+    await fastify.register(sendLogRoutes, { prefix: '/admin/send-logs' });
 
     // 外部 API
     await fastify.register(mailRoutes, { prefix: '/api' });
+
+    // Resend 兼容接口（Graph 账号池发信）
+    await fastify.register(resendRoutes, { prefix: '/resend' });
 
     // SPA fallback - 现在可以安全使用 setNotFoundHandler
     fastify.setNotFoundHandler(async (request, reply) => {

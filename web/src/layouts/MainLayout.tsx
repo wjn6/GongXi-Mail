@@ -26,6 +26,7 @@ import {
     FileTextOutlined,
     HistoryOutlined,
     FileSearchOutlined,
+    SendOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
 import { authApi } from '../api';
@@ -46,6 +47,7 @@ const menuConfig = [
     { key: '/emails', icon: <MailOutlined />, label: '邮箱管理', title: '邮箱管理' },
     { key: '/api-keys', icon: <KeyOutlined />, label: 'API Key', title: 'API Key 管理' },
     { key: '/api-docs', icon: <FileTextOutlined />, label: 'API 文档', title: 'API 文档' },
+    { key: '/send-logs', icon: <SendOutlined />, label: '发信记录', title: '发信记录' },
     { key: '/operation-logs', icon: <HistoryOutlined />, label: '操作日志', title: '操作日志' },
     { key: '/system-logs', icon: <FileSearchOutlined />, label: '系统日志', title: '系统日志' },
     { key: '/admins', icon: <UserOutlined />, label: '管理员', title: '管理员管理', superAdmin: true },

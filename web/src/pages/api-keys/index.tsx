@@ -38,7 +38,7 @@ import {
 import { apiKeyApi, groupApi, emailApi } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
-import { LOG_ACTION_OPTIONS } from '../../constants/logActions';
+import { EXPLICIT_PERMISSION_ACTIONS, LOG_ACTION_OPTIONS } from '../../constants/logActions';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -133,12 +133,15 @@ const ApiKeysPage: React.FC = () => {
         () =>
             LOG_ACTION_OPTIONS.map((item) => ({
                 value: item.value,
-                label: item.label,
+                label: EXPLICIT_PERMISSION_ACTIONS.has(item.value) ? `${item.label}（需单独开启）` : item.label,
             })),
         []
     );
+    // 默认勾选的权限：不含发信类（发信权限必须手动勾选）
     const allPermissionActions = useMemo(
-        () => permissionActionOptions.map((item) => item.value),
+        () => permissionActionOptions
+            .map((item) => item.value)
+            .filter((value) => !EXPLICIT_PERMISSION_ACTIONS.has(value)),
         [permissionActionOptions]
     );
 

@@ -14,11 +14,16 @@ export const groupService = {
             orderBy: { id: 'asc' },
         });
 
-        return groups.map((g: { id: number; name: string; description: string | null; fetchStrategy: string; _count: { emails: number }; createdAt: Date; updatedAt: Date }) => ({
+        return groups.map((g) => ({
             id: g.id,
             name: g.name,
             description: g.description,
             fetchStrategy: g.fetchStrategy,
+            sendEnabled: g.sendEnabled,
+            sendStrategy: g.sendStrategy,
+            sendDailyLimit: g.sendDailyLimit,
+            sendIntervalSeconds: g.sendIntervalSeconds,
+            sendMaxRecipients: g.sendMaxRecipients,
             emailCount: g._count.emails,
             createdAt: g.createdAt,
             updatedAt: g.updatedAt,
@@ -71,6 +76,11 @@ export const groupService = {
                 name: input.name,
                 description: input.description,
                 fetchStrategy: input.fetchStrategy,
+                sendEnabled: input.sendEnabled,
+                sendStrategy: input.sendStrategy,
+                sendDailyLimit: input.sendDailyLimit,
+                sendIntervalSeconds: input.sendIntervalSeconds,
+                sendMaxRecipients: input.sendMaxRecipients,
             },
         });
     },

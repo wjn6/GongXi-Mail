@@ -11,6 +11,8 @@ export const LOG_ACTIONS = {
     CLAIM_EMAIL: 'claim_email',
     COMPLETE_EMAIL: 'complete_email',
     RELEASE_EMAIL: 'release_email',
+    SEND_MAIL: 'send_mail',
+    SEND_READ: 'send_read',
 } as const;
 
 export type LogAction = typeof LOG_ACTIONS[keyof typeof LOG_ACTIONS];
@@ -33,6 +35,8 @@ export const LOG_ACTION_LABELS: Record<LogAction, string> = {
     [LOG_ACTIONS.CLAIM_EMAIL]: '领取邮箱',
     [LOG_ACTIONS.COMPLETE_EMAIL]: '完成领取',
     [LOG_ACTIONS.RELEASE_EMAIL]: '释放领取',
+    [LOG_ACTIONS.SEND_MAIL]: '发送邮件',
+    [LOG_ACTIONS.SEND_READ]: '查询已发邮件',
 };
 
 export const LOG_ACTION_COLORS: Record<LogAction, string> = {
@@ -48,6 +52,8 @@ export const LOG_ACTION_COLORS: Record<LogAction, string> = {
     [LOG_ACTIONS.CLAIM_EMAIL]: 'cyan',
     [LOG_ACTIONS.COMPLETE_EMAIL]: 'success',
     [LOG_ACTIONS.RELEASE_EMAIL]: 'orange',
+    [LOG_ACTIONS.SEND_MAIL]: 'magenta',
+    [LOG_ACTIONS.SEND_READ]: 'default',
 };
 
 export const LOG_ACTION_OPTIONS: Array<{ value: LogAction; label: string }> = [
@@ -63,7 +69,15 @@ export const LOG_ACTION_OPTIONS: Array<{ value: LogAction; label: string }> = [
     { value: LOG_ACTIONS.CLAIM_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.CLAIM_EMAIL] },
     { value: LOG_ACTIONS.COMPLETE_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.COMPLETE_EMAIL] },
     { value: LOG_ACTIONS.RELEASE_EMAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.RELEASE_EMAIL] },
+    { value: LOG_ACTIONS.SEND_MAIL, label: LOG_ACTION_LABELS[LOG_ACTIONS.SEND_MAIL] },
+    { value: LOG_ACTIONS.SEND_READ, label: LOG_ACTION_LABELS[LOG_ACTIONS.SEND_READ] },
 ];
+
+/** 必须显式勾选的权限：未配置权限的 Key 也不能调用（与后端 EXPLICIT_PERMISSION_ACTIONS 一致） */
+export const EXPLICIT_PERMISSION_ACTIONS: ReadonlySet<LogAction> = new Set<LogAction>([
+    LOG_ACTIONS.SEND_MAIL,
+    LOG_ACTIONS.SEND_READ,
+]);
 
 export function normalizeLogAction(action: string): LogAction | undefined {
     if (action in LOG_ACTION_LABELS) {

@@ -508,6 +508,78 @@ curl -s -X POST "${baseUrl}/api/complete-email" -H "X-API-Key: $KEY" \\
 # curl -s -X POST "${baseUrl}/api/release-email" ...（参数相同）`;
 
 // ============================================================
+// Resend 兼容接口
+// ============================================================
+
+interface ResendEndpoint {
+  method: string;
+  path: string;
+  resend: string;
+  permission: LogAction;
+  desc: string;
+}
+
+const RESEND_ENDPOINTS: ResendEndpoint[] = [
+  { method: 'POST', path: '/resend/emails', resend: 'POST /emails', permission: LOG_ACTIONS.SEND_MAIL, desc: '发送一封邮件，返回 { id }。同步发送，返回时 Graph 已接收' },
+  { method: 'POST', path: '/resend/emails/batch', resend: 'POST /emails/batch', permission: LOG_ACTIONS.SEND_MAIL, desc: '批量发送，最多 100 封，返回 { data: [{ id }] }。进入队列按池内账号逐封发送；支持 x-batch-validation' },
+  { method: 'GET', path: '/resend/emails/:id', resend: 'GET /emails/:id', permission: LOG_ACTIONS.SEND_READ, desc: '查询一封已发邮件（object: "email"）' },
+  { method: 'GET', path: '/resend/emails', resend: 'GET /emails', permission: LOG_ACTIONS.SEND_READ, desc: '列出当前 Key 发出的邮件，支持 limit（1~100）、after、before 游标' },
+];
+
+const RESEND_DIFFERENCES = [
+  { key: 'from', item: 'from', desc: '地址正好是发信池中（Key 范围内、分组已开启发信）的账号时用该账号发；否则从池中挑号，保留显示名，实际发件地址为挑中的账号（查询接口返回实际地址）' },
+  { key: 'pool', item: '发信账号', desc: '来自 Key「可用分组 / 可用邮箱」范围内、分组已开启发信、且令牌带 Mail.Send 权限的账号；按分组的挑号方式、24 小时上限、发信间隔轮换' },
+  { key: 'att', item: 'attachments', desc: '支持 content（base64）和 path（仅 https 公网地址），每封合计 3 MB 以内（Graph 单次请求上限）；批量接口与 Resend 一样不支持附件' },
+  { key: 'headers', item: 'headers', desc: '只支持 X- 开头的自定义头，其它头返回 422' },
+  { key: 'event', item: 'last_event', desc: 'Graph 只能确认已接收：sent（已提交）/ queued（排队中）/ failed（失败），没有 delivered、opened 等事件；message_id 为 null' },
+  { key: 'unsupported', item: '暂不支持', desc: 'scheduled_at、template、topic_id 传入时返回 422，不会被忽略' },
+  { key: 'idem', item: 'Idempotency-Key', desc: '与 Resend 相同：24 小时有效，最长 256 字符；同 Key 不同请求体返回 409 invalid_idempotent_request' },
+];
+
+const RESEND_ERRORS = [
+  { key: '401a', status: 401, name: 'missing_api_key', desc: '没有携带 API Key' },
+  { key: '401b', status: 401, name: 'validation_error', desc: 'API key is invalid' },
+  { key: '401c', status: 401, name: 'restricted_api_key', desc: 'Key 没有 send_mail / send_read 权限' },
+  { key: '403a', status: 403, name: 'restricted_api_key', desc: 'Key 已禁用或过期' },
+  { key: '403b', status: 403, name: 'validation_error', desc: 'Key 范围内没有开启发信的分组，或没有带 Mail.Send 权限的账号' },
+  { key: '422', status: 422, name: 'validation_error 等', desc: '字段错误：missing_required_field、invalid_from_address、invalid_attachment、invalid_parameter' },
+  { key: '409', status: 409, name: 'invalid_idempotent_request / concurrent_idempotent_requests', desc: '幂等 Key 冲突' },
+  { key: '429a', status: 429, name: 'daily_quota_exceeded', desc: '池内账号的 24 小时额度都已用完' },
+  { key: '429b', status: 429, name: 'rate_limit_exceeded', desc: '账号都在冷却或发信间隔内，或超过 Key 的每分钟调用次数' },
+  { key: '500', status: 500, name: 'application_error', desc: '换号重试后仍发送失败' },
+];
+
+const RESEND_EXAMPLE = (baseUrl: string) => `// Node.js 官方 SDK：把 baseUrl 指向本系统，密钥使用本系统的 sk_ Key
+import { Resend } from 'resend';
+
+const resend = new Resend('sk_your_api_key', { baseUrl: '${baseUrl}/resend' });
+// 也可以设置环境变量 RESEND_BASE_URL=${baseUrl}/resend
+
+const { data, error } = await resend.emails.send({
+  from: 'Acme <noreply@acme.dev>',   // 显示名保留，发件地址为池中账号
+  to: ['user@example.com'],
+  subject: 'hello world',
+  html: '<p>it works!</p>',
+});`;
+
+const RESEND_CURL = (baseUrl: string) => `curl -X POST '${baseUrl}/resend/emails' \\
+  -H 'Authorization: Bearer sk_your_api_key' \\
+  -H 'Content-Type: application/json' \\
+  -H 'Idempotency-Key: welcome-user/123' \\
+  -d '{
+    "from": "Acme <noreply@acme.dev>",
+    "to": ["user@example.com"],
+    "subject": "hello world",
+    "html": "<p>it works!</p>",
+    "attachments": [{ "filename": "hello.txt", "content": "aGVsbG8=" }]
+  }'
+
+# {"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}
+
+curl '${baseUrl}/resend/emails/49a3999c-0ce1-4ea6-ab68-afcd6dc2e794' \\
+  -H 'Authorization: Bearer sk_your_api_key'`;
+
+// ============================================================
 // 组件
 // ============================================================
 
@@ -671,7 +743,8 @@ const ApiDocsPage: React.FC = () => {
   const actionRows = (Object.values(LOG_ACTIONS) as LogAction[]).map((action) => ({
     action,
     label: LOG_ACTION_LABELS[action],
-    path: API_ENDPOINTS.find((api) => api.permission === action)?.path ?? '-',
+    path: API_ENDPOINTS.find((api) => api.permission === action)?.path
+      ?? (RESEND_ENDPOINTS.filter((api) => api.permission === action).map((api) => `${api.method} ${api.path}`).join('、') || '-'),
   }));
 
   return (
@@ -811,6 +884,70 @@ const ApiDocsPage: React.FC = () => {
           );
         })}
         {filteredEndpoints.length === 0 && <Text type="secondary">没有匹配的接口</Text>}
+      </Card>
+
+      <Card title="Resend 兼容接口（Graph 账号池发信）" style={{ marginBottom: 16 }} id="resend">
+        <Paragraph style={{ marginBottom: 8 }}>
+          与 Resend 发信接口保持一致：请求字段、响应结构和错误格式都相同，现有 Resend SDK 或代码只需把接口地址改成
+          <Text code copyable>{`${baseUrl}/resend`}</Text>，密钥换成本系统的 API Key。邮件实际由分组发信池中的 Outlook 账号通过 Microsoft Graph 发出。
+        </Paragraph>
+        <ul style={{ paddingInlineStart: 20, margin: '0 0 12px' }}>
+          <li>认证：<Text code>Authorization: Bearer sk_your_api_key</Text></li>
+          <li>权限：发信需要 <Text code>send_mail</Text>，查询需要 <Text code>send_read</Text>。这两项必须在 API Key 中单独勾选，未配置权限的 Key 也不能调用。</li>
+          <li>准备：在「邮箱管理 → 邮箱分组」开启分组的发信，并在邮箱列表中检测账号的发信权限（令牌需带 Mail.Send）。</li>
+          <li>错误格式：<Text code>{'{"statusCode": 422, "name": "validation_error", "message": "..."}'}</Text></li>
+        </ul>
+
+        <SectionTitle>接口</SectionTitle>
+        <Table
+          dataSource={RESEND_ENDPOINTS}
+          columns={[
+            { title: '接口', key: 'path', render: (_: unknown, item: ResendEndpoint) => <Space size={4}><Tag color="blue">{item.method}</Tag><Text code>{item.path}</Text></Space> },
+            { title: '对应 Resend', dataIndex: 'resend', key: 'resend', render: (v: string) => <Text type="secondary">{v}</Text> },
+            { title: '权限键', dataIndex: 'permission', key: 'permission', render: (v: string) => <Text code>{v}</Text> },
+            { title: '说明', dataIndex: 'desc', key: 'desc' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="path"
+          scroll={{ x: 'max-content' }}
+        />
+
+        <SectionTitle>SDK 示例</SectionTitle>
+        <CodeBlock code={RESEND_EXAMPLE(baseUrl)} />
+        <Paragraph type="secondary" style={{ margin: '8px 0 0', fontSize: 12 }}>
+          其它语言的 Resend SDK 同样把接口地址（base URL）改为上面的地址即可，具体设置方式以各 SDK 文档为准。
+        </Paragraph>
+
+        <SectionTitle>curl 示例</SectionTitle>
+        <CodeBlock code={RESEND_CURL(baseUrl)} />
+
+        <SectionTitle>与 Resend 的差异（由 Graph 发信决定）</SectionTitle>
+        <Table
+          dataSource={RESEND_DIFFERENCES}
+          columns={[
+            { title: '项目', dataIndex: 'item', key: 'item', width: 140, render: (v: string) => <Text code>{v}</Text> },
+            { title: '说明', dataIndex: 'desc', key: 'desc' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="key"
+          scroll={{ x: 'max-content' }}
+        />
+
+        <SectionTitle>错误</SectionTitle>
+        <Table
+          dataSource={RESEND_ERRORS}
+          columns={[
+            { title: 'HTTP', dataIndex: 'status', key: 'status', width: 70 },
+            { title: 'name', dataIndex: 'name', key: 'name', render: (v: string) => <Text code>{v}</Text> },
+            { title: '说明', dataIndex: 'desc', key: 'desc' },
+          ]}
+          pagination={false}
+          size="small"
+          rowKey="key"
+          scroll={{ x: 'max-content' }}
+        />
       </Card>
 
       <Card title="操作日志 Action / 权限键">

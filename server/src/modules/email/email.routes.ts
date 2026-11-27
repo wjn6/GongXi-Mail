@@ -6,6 +6,25 @@ import { createEmailSchema, updateEmailSchema, listEmailSchema, importEmailSchem
 import { z } from 'zod';
 import { AppError } from '../../plugins/error.js';
 import { getTokenRefreshJobNextRunAt, refreshTokenRefreshJobSchedule } from '../../jobs/token-refresh.js';
+import { randomUUID } from 'node:crypto';
+import prisma from '../../lib/prisma.js';
+import { SendRequestError, normalizeSendRequest } from '../../lib/send-mail.js';
+import { checkSendCapability, sendWithAccount } from '../send/send.service.js';
+
+const CHECK_SEND_CONCURRENCY = 5;
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (next < items.length) {
+            const index = next++;
+            results[index] = await fn(items[index]);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
 
 const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 所有路由需要 JWT 认证
@@ -263,6 +282,119 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             success: result.success,
         }, result.success ? '手动刷新单个邮箱 Token 成功' : '手动刷新单个邮箱 Token 失败');
         return { success: true, data: result };
+    });
+
+    // ========================================
+    // 发信能力检测（检查令牌是否包含 Mail.Send）
+    // ========================================
+    fastify.post('/check-send', async (request) => {
+        const input = z.object({
+            ids: z.array(z.number().int().positive()).min(1).max(200),
+        }).parse(request.body);
+        const ids = Array.from(new Set(input.ids));
+        const results = await mapWithConcurrency(ids, CHECK_SEND_CONCURRENCY, (id) => checkSendCapability(id));
+        const summary = {
+            total: results.length,
+            allowed: results.filter((item) => item.capability === 'ALLOWED').length,
+            denied: results.filter((item) => item.capability === 'DENIED').length,
+            failed: results.filter((item) => item.capability === 'UNKNOWN').length,
+        };
+        request.log.info({
+            systemEvent: true,
+            action: 'email.send_check',
+            actorId: request.user?.id ?? null,
+            actorUsername: request.user?.username ?? null,
+            ...summary,
+        }, '批量检测发信权限');
+        return { success: true, data: { ...summary, results } };
+    });
+
+    fastify.post('/:id/check-send', async (request) => {
+        const { id } = request.params as { id: string };
+        const result = await checkSendCapability(parseInt(id));
+        if (!result.email) {
+            throw new AppError('NOT_FOUND', 'Email account not found', 404);
+        }
+        request.log.info({
+            systemEvent: true,
+            action: 'email.send_check',
+            actorId: request.user?.id ?? null,
+            actorUsername: request.user?.username ?? null,
+            emailId: result.id,
+            email: result.email,
+            capability: result.capability,
+        }, '检测邮箱发信权限');
+        return { success: true, data: result };
+    });
+
+    // ========================================
+    // 测试发信（指定账号，不受分组开关 / 间隔 / 额度限制，计入发信记录）
+    // ========================================
+    fastify.post('/:id/test-send', async (request) => {
+        const { id } = request.params as { id: string };
+        const input = z.object({
+            to: z.string().email(),
+            subject: z.string().min(1).max(200).optional(),
+            text: z.string().min(1).max(5000).optional(),
+        }).parse(request.body);
+
+        const account = await prisma.emailAccount.findUnique({
+            where: { id: parseInt(id) },
+            select: { id: true, email: true },
+        });
+        if (!account) {
+            throw new AppError('NOT_FOUND', 'Email account not found', 404);
+        }
+
+        let normalized;
+        try {
+            normalized = normalizeSendRequest({
+                to: input.to,
+                subject: input.subject || 'GongXi Mail 测试发信',
+                text: input.text || `这是一封来自 GongXi Mail 的测试邮件，发件账号：${account.email}`,
+            });
+        } catch (err) {
+            if (err instanceof SendRequestError) {
+                throw new AppError('VALIDATION_ERROR', err.message, 400);
+            }
+            throw err;
+        }
+
+        const logId = randomUUID();
+        await prisma.sendLog.create({
+            data: {
+                id: logId,
+                source: 'ADMIN',
+                status: 'QUEUED',
+                adminId: request.user?.id ?? null,
+                requestedFrom: account.email,
+                toAddresses: normalized.to as unknown as object,
+                subject: normalized.subject,
+                text: normalized.text,
+                html: normalized.html,
+                recipientCount: normalized.recipientCount,
+                requestIp: request.ip,
+            },
+        });
+        const outcome = await sendWithAccount(logId, account.id, normalized);
+        request.log.info({
+            systemEvent: true,
+            action: 'email.test_send',
+            actorId: request.user?.id ?? null,
+            actorUsername: request.user?.username ?? null,
+            emailId: account.id,
+            email: account.email,
+            success: outcome.ok,
+        }, outcome.ok ? '测试发信成功' : '测试发信失败');
+        return {
+            success: true,
+            data: {
+                sent: outcome.ok,
+                logId,
+                message: outcome.ok ? 'Accepted by Microsoft Graph' : outcome.message,
+                reason: outcome.ok ? null : outcome.reason,
+            },
+        };
     });
 
     // ========================================

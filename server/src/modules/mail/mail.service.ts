@@ -1,7 +1,8 @@
 import { emailService } from '../email/email.service.js';
 import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
-import { setCache, getCache } from '../../lib/redis.js';
+import { setCache, getCache, deleteCache } from '../../lib/redis.js';
+import { hasMailSendScope } from '../../lib/send-mail.js';
 import { proxyFetch } from '../../lib/proxy.js';
 import prisma from '../../lib/prisma.js';
 import Imap from 'node-imap';
@@ -170,6 +171,106 @@ export const mailService = {
         } catch (err) {
             logger.error({ err, email: credentials.email }, 'Failed to get Graph API token');
             return null;
+        }
+    },
+
+    /**
+     * 获取用于发信的 Graph Access Token，并返回是否包含 Mail.Send 权限。
+     * 只有包含 Mail.Send 时才缓存；force 为 true 时跳过缓存（用于检测发信权限）。
+     */
+    async getGraphSendToken(
+        credentials: Credentials,
+        options: { force?: boolean; proxyConfig?: { socks5?: string; http?: string } } = {}
+    ): Promise<{ accessToken: string; hasMailSend: boolean; scope: string } | { error: string }> {
+        const cacheKey = `graph_send_token_${credentials.email}`;
+        if (!options.force) {
+            const cached = await getCache(cacheKey);
+            if (cached) {
+                return { accessToken: cached, hasMailSend: true, scope: 'Mail.Send' };
+            }
+        }
+
+        try {
+            const response = await proxyFetch(
+                'https://login.microsoftonline.com/consumers/oauth2/v2.0/token',
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        client_id: credentials.clientId,
+                        grant_type: 'refresh_token',
+                        refresh_token: credentials.refreshToken,
+                        scope: 'https://graph.microsoft.com/.default',
+                    }).toString(),
+                },
+                options.proxyConfig
+            );
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                let message = `HTTP ${response.status}`;
+                try {
+                    const parsed = JSON.parse(errorText) as { error_description?: string; error?: string };
+                    message = parsed.error_description || parsed.error || message;
+                } catch {
+                    message = errorText.slice(0, 200) || message;
+                }
+                logger.warn({ email: credentials.email, status: response.status }, 'Graph send token request failed');
+                return { error: message.slice(0, 300) };
+            }
+
+            const data = await response.json() as OAuthTokenResponse;
+            const accessToken = typeof data.access_token === 'string' ? data.access_token : null;
+            if (!accessToken) {
+                return { error: 'Token response missing access_token' };
+            }
+            const scope = typeof data.scope === 'string' ? data.scope : '';
+            const hasMailSend = hasMailSendScope(scope);
+            if (hasMailSend) {
+                const expireTime = (typeof data.expires_in === 'number' ? data.expires_in : 3600) - 60;
+                await setCache(cacheKey, accessToken, Math.max(expireTime, 60));
+            }
+            return { accessToken, hasMailSend, scope };
+        } catch (err) {
+            logger.error({ err, email: credentials.email }, 'Failed to get Graph send token');
+            return { error: getErrorMessage(err).slice(0, 300) };
+        }
+    },
+
+    async clearGraphSendToken(email: string) {
+        await deleteCache(`graph_send_token_${email}`);
+    },
+
+    /**
+     * 通过 Graph POST /me/sendMail 发信。成功为 202 Accepted（不代表已送达）。
+     */
+    async sendMailViaGraph(
+        accessToken: string,
+        payload: unknown,
+        proxyConfig?: { socks5?: string; http?: string }
+    ): Promise<{ ok: true } | { ok: false; status: number; bodyText: string; retryAfter: string | null }> {
+        try {
+            const response = await proxyFetch(
+                'https://graph.microsoft.com/v1.0/me/sendMail',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                },
+                proxyConfig
+            );
+            if (response.status === 202 || response.ok) {
+                await response.text().catch(() => '');
+                return { ok: true };
+            }
+            const bodyText = await response.text().catch(() => '');
+            return { ok: false, status: response.status, bodyText, retryAfter: response.headers.get('retry-after') };
+        } catch (err) {
+            logger.error({ err }, 'Graph sendMail request failed');
+            return { ok: false, status: 0, bodyText: getErrorMessage(err), retryAfter: null };
         }
     },
 

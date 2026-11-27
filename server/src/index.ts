@@ -5,12 +5,14 @@ import prisma from './lib/prisma.js';
 import { startApiLogRetentionJob } from './jobs/api-log-retention.js';
 import { startTokenRefreshJob } from './jobs/token-refresh.js';
 import { startPoolClaimCleanupJob } from './jobs/pool-claim-cleanup.js';
+import { startSendQueueJob } from './jobs/send-queue.js';
 
 async function main() {
     const app = await buildApp();
     let stopApiLogRetentionJob = () => {};
     let stopTokenRefreshJob = () => {};
     let stopPoolClaimCleanupJob = () => {};
+    let stopSendQueueJob = () => {};
 
     // 优雅关闭
     const shutdown = async () => {
@@ -18,6 +20,7 @@ async function main() {
         stopApiLogRetentionJob();
         stopTokenRefreshJob();
         stopPoolClaimCleanupJob();
+        stopSendQueueJob();
         await app.close();
         await prisma.$disconnect();
         process.exit(0);
@@ -33,6 +36,7 @@ async function main() {
         stopApiLogRetentionJob = startApiLogRetentionJob();
         stopTokenRefreshJob = startTokenRefreshJob();
         stopPoolClaimCleanupJob = startPoolClaimCleanupJob();
+        stopSendQueueJob = startSendQueueJob();
 
         // 启动服务器
         await app.listen({ port: env.PORT, host: '0.0.0.0' });

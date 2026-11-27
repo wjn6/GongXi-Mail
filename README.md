@@ -218,12 +218,53 @@ curl -G "$BASE/api/mail_text" -H "X-API-Key: $KEY" \
 | `MAILBOX_CLEAR_UNSUPPORTED` | 400 | 分组策略为 `IMAP_ONLY`，不能清空 |
 | `GRAPH_API_FAILED` | 500 | 清空邮箱时获取 Graph 访问令牌失败 |
 
+## Resend 兼容发信接口（Graph 账号池）
+
+在 `/resend` 下提供与 [Resend](https://resend.com/docs/api-reference/emails/send-email) 相同的发信接口：请求字段、响应结构、错误格式都一致，
+已有的 Resend SDK / 代码只需把接口地址改为 `https://你的域名/resend`、密钥换成本系统的 `sk_` Key。邮件由分组发信池中的 Outlook 账号通过 Microsoft Graph `sendMail` 发出。
+代码位于 `server/src/modules/resend/`、`server/src/modules/send/`。
+
+| 接口 | 对应 Resend | 权限键 | 说明 |
+|------|-------------|--------|------|
+| `POST /resend/emails` | `POST /emails` | `send_mail` | 同步发送，返回 `{"id": "uuid"}` |
+| `POST /resend/emails/batch` | `POST /emails/batch` | `send_mail` | 最多 100 封，排队逐封发送；支持 `x-batch-validation: strict / permissive`；不支持附件 |
+| `GET /resend/emails/:id` | `GET /emails/:id` | `send_read` | 查询已发邮件 |
+| `GET /resend/emails` | `GET /emails` | `send_read` | 列表，`limit`（1~100，默认 20）、`after` / `before` 游标 |
+
+```js
+import { Resend } from 'resend';
+const resend = new Resend('sk_xxx', { baseUrl: 'https://你的域名/resend' }); // 或设置环境变量 RESEND_BASE_URL
+await resend.emails.send({ from: 'Acme <noreply@acme.dev>', to: ['user@example.com'], subject: 'hi', html: '<p>hi</p>' });
+```
+
+**启用步骤**
+
+1. 「邮箱管理 → 邮箱分组」编辑分组，开启「参与发信池」，设置挑号方式、每账号 24 小时上限、同账号发信间隔、每封收件人上限。
+2. 在邮箱列表选中账号「检测发信权限」：令牌必须带 `Mail.Send`（取决于导入账号时 client_id 申请的权限，服务端无法补充），没有的账号不会进入发信池。
+3. API Key 勾选 `send_mail`（以及需要查询时的 `send_read`）。**这两项必须显式勾选，未配置权限的 Key 也不能发信。**
+   Key 的「可用分组 / 可用邮箱」同时决定能用哪些账号发信。
+
+**挑号规则**：账号正常、分组已开启发信、未被标记无权限、不在冷却中、距上次发信超过间隔、24 小时内（滚动窗口）未达上限、分组收件人上限足够；
+按分组的挑号方式排序（最少使用 / 轮流 / 随机），用数据库行锁避免并发挑中同一账号。Graph 返回限流按 `Retry-After` 冷却、被禁止发信冷却 24 小时、
+无权限标记为不可发信，并自动换下一个账号重试（每封最多 3 个账号）；收件人错误等请求问题不重试。
+
+**与 Resend 的差异**（由 Graph 发信决定）：
+
+- `from`：地址是发信池中（Key 范围内、分组已开启发信）的账号时用该账号发；否则从池中挑号，保留显示名，实际发件地址为挑中的账号。
+- 附件：`content`（base64）或 `path`（仅 https 公网地址，拒绝内网与保留地址），每封合计 3 MB 以内。
+- `headers` 只支持 `X-` 开头的自定义头；`scheduled_at`、`template`、`topic_id` 暂不支持，传入返回 422。
+- `last_event` 只有 `sent`（Graph 已接收）、`queued`、`failed`；`message_id` 为 `null`。
+- `Idempotency-Key` 规则与 Resend 相同（24 小时、最长 256 字符、同 Key 不同请求体返回 409）。
+
+后台「发信记录」页面可以查看每个分组的发信池状态（可发 / 未检测 / 无权限 / 冷却中、24 小时已发、剩余额度）和每封邮件的发送详情；
+邮箱列表可对单个账号「测试发信」（不受分组开关、间隔、额度限制，但计入发信量）。
+
 ## 操作日志 Action 与 API Key 权限键
 
 每次外部调用都会记录到 `/admin/dashboard/logs`，`action` 与 API Key 的 `permissions` 使用同一套值，
 对应关系见上方「接口列表」的权限键列（注意 `/api/reset-pool` 的权限键是 `pool_reset`）。
 
-未配置 `permissions` 时默认允许全部接口；配置了权限的旧 Key 需要在后台勾选
+未配置 `permissions` 时默认允许全部 `/api/*` 接口（发信的 `send_mail` / `send_read` 除外，必须显式勾选）；配置了权限的旧 Key 需要在后台勾选
 `wait_code` / `claim_email` / `complete_email` / `release_email` 后才能调用新接口。
 两端定义分别在 `server/src/modules/mail/mail.actions.ts` 与 `web/src/constants/logActions.ts`，需保持一致。
 

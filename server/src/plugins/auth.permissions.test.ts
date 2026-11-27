@@ -22,6 +22,15 @@ void test('normalizes kebab-case action keys', () => {
     assert.equal(isApiPermissionAllowed({ 'process-mailbox': true }, 'process_mailbox'), true);
 });
 
+void test('send actions require explicit permission', () => {
+    assert.equal(isApiPermissionAllowed(undefined, 'send_mail'), false);
+    assert.equal(isApiPermissionAllowed({}, 'send_read'), false);
+    assert.equal(isApiPermissionAllowed({ mail_new: true }, 'send_mail'), false);
+    assert.equal(isApiPermissionAllowed({ send_mail: true }, 'send_mail'), true);
+    assert.equal(isApiPermissionAllowed({ send_mail: true }, 'send_read'), false);
+    assert.equal(isApiPermissionAllowed({ '*': true }, 'send_mail'), true);
+});
+
 void test('drops unknown permission keys when parsing', () => {
     const parsed = parseApiPermissions({
         mail_new: true,

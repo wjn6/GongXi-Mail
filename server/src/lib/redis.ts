@@ -74,4 +74,20 @@ export async function getCache(key: string): Promise<string | null> {
     }
 }
 
+/**
+ * 缓存删除
+ */
+export async function deleteCache(key: string): Promise<void> {
+    const client = getRedis();
+    if (!client) {
+        return;
+    }
+
+    try {
+        await client.del(key);
+    } catch (err) {
+        logger.error({ err, key }, 'Failed to delete cache');
+    }
+}
+
 export default getRedis;

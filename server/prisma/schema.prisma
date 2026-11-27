@@ -53,6 +53,8 @@ model ApiKey {
   creator     Admin        @relation(fields: [createdBy], references: [id])
   emailUsages EmailUsage[]
   apiLogs     ApiLog[]
+  sendLogs    SendLog[]
+  idempotencyRecords ResendIdempotency[]
 
   @@map("api_keys")
 }
@@ -65,10 +67,17 @@ model EmailGroup {
   name        String   @unique @db.VarChar(50)
   description String?  @db.VarChar(255)
   fetchStrategy MailFetchStrategy @default(GRAPH_FIRST) @map("fetch_strategy")
+  // 发信池配置（默认关闭）
+  sendEnabled         Boolean      @default(false) @map("send_enabled")
+  sendStrategy        SendStrategy @default(LEAST_USED) @map("send_strategy")
+  sendDailyLimit      Int          @default(30) @map("send_daily_limit")
+  sendIntervalSeconds Int          @default(60) @map("send_interval_seconds")
+  sendMaxRecipients   Int          @default(10) @map("send_max_recipients")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  emails EmailAccount[]
+  emails   EmailAccount[]
+  sendLogs SendLog[]
 
   @@map("email_groups")
 }
@@ -87,12 +96,19 @@ model EmailAccount {
   lastCheckAt  DateTime?   @map("last_check_at")
   tokenRefreshedAt DateTime? @map("token_refreshed_at")
   errorMessage String?     @map("error_message") @db.Text
+  // 发信状态
+  sendCapability    SendCapability @default(UNKNOWN) @map("send_capability")
+  sendCheckedAt     DateTime?      @map("send_checked_at")
+  lastSentAt        DateTime?      @map("last_sent_at")
+  sendCooldownUntil DateTime?      @map("send_cooldown_until")
+  sendErrorMessage  String?        @map("send_error_message") @db.Text
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
   group   EmailGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  usages  EmailUsage[]
-  apiLogs ApiLog[]
+  usages   EmailUsage[]
+  apiLogs  ApiLog[]
+  sendLogs SendLog[]
 
   @@map("email_accounts")
 }
@@ -164,6 +180,83 @@ model ApiLog {
 }
 
 // ============================================
+// 发信记录（Resend 兼容接口 / 后台测试发信）
+// id 即 Resend 接口返回的邮件 ID
+// ============================================
+model SendLog {
+  id               String     @id @db.Uuid
+  source           SendSource
+  status           SendStatus
+  apiKeyId         Int?       @map("api_key_id")
+  adminId          Int?       @map("admin_id")
+  groupId          Int?       @map("group_id")
+  emailAccountId   Int?       @map("email_account_id")
+  // 请求中的 from 原文；实际发件地址见 fromAddress
+  requestedFrom    String     @map("requested_from") @db.VarChar(512)
+  fromName         String?    @map("from_name") @db.VarChar(255)
+  fromAddress      String?    @map("from_address") @db.VarChar(255)
+  toAddresses      Json       @map("to_addresses")
+  ccAddresses      Json?      @map("cc_addresses")
+  bccAddresses     Json?      @map("bcc_addresses")
+  replyTo          Json?      @map("reply_to")
+  subject          String     @db.VarChar(998)
+  html             String?    @db.Text
+  text             String?    @db.Text
+  headers          Json?
+  tags             Json?
+  recipientCount   Int        @map("recipient_count")
+  attachmentCount  Int        @default(0) @map("attachment_count")
+  attachmentBytes  Int        @default(0) @map("attachment_bytes")
+  attempts         Int        @default(0)
+  errorCode        String?    @map("error_code") @db.VarChar(64)
+  errorMessage     String?    @map("error_message") @db.Text
+  batchId          String?    @map("batch_id") @db.Uuid
+  batchIndex       Int?       @map("batch_index")
+  requestIp        String?    @map("request_ip") @db.VarChar(45)
+  createdAt        DateTime   @default(now()) @map("created_at")
+  // 最近一次分配发件账号的时间（用于按账号统计 24 小时发信量）
+  attemptedAt      DateTime?  @map("attempted_at")
+  sentAt           DateTime?  @map("sent_at")
+  // 排队邮件下次尝试时间 / 被发送任务领取的时间
+  nextAttemptAt    DateTime?  @map("next_attempt_at")
+  lockedAt         DateTime?  @map("locked_at")
+
+  apiKey       ApiKey?       @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  group        EmailGroup?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  emailAccount EmailAccount? @relation(fields: [emailAccountId], references: [id], onDelete: SetNull)
+
+  @@index([emailAccountId, status, attemptedAt])
+  @@index([apiKeyId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@index([groupId, createdAt])
+  @@index([batchId])
+  @@index([createdAt])
+  @@map("send_logs")
+}
+
+// ============================================
+// Resend 兼容接口的幂等记录（Idempotency-Key，24 小时有效）
+// ============================================
+model ResendIdempotency {
+  id             Int               @id @default(autoincrement())
+  apiKeyId       Int               @map("api_key_id")
+  endpoint       String            @db.VarChar(32)
+  key            String            @db.VarChar(256)
+  requestHash    String            @map("request_hash") @db.VarChar(64)
+  status         IdempotencyStatus
+  responseStatus Int?              @map("response_status")
+  responseBody   Json?             @map("response_body")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  expiresAt      DateTime          @map("expires_at")
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, endpoint, key])
+  @@index([expiresAt])
+  @@map("resend_idempotency")
+}
+
+// ============================================
 // 枚举
 // ============================================
 enum Role {
@@ -180,6 +273,35 @@ enum EmailStatus {
   ACTIVE
   ERROR
   DISABLED
+}
+
+enum SendStrategy {
+  LEAST_USED
+  ROUND_ROBIN
+  RANDOM
+}
+
+enum SendCapability {
+  UNKNOWN
+  ALLOWED
+  DENIED
+}
+
+enum SendSource {
+  RESEND
+  ADMIN
+}
+
+enum SendStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
 }
 
 enum EmailUsageStatus {

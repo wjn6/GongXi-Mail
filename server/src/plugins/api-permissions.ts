@@ -1,4 +1,4 @@
-import { MAIL_LOG_ACTIONS } from '../modules/mail/mail.actions.js';
+import { EXPLICIT_PERMISSION_ACTIONS, MAIL_LOG_ACTIONS } from '../modules/mail/mail.actions.js';
 
 export type ApiPermissions = Record<string, boolean>;
 
@@ -34,11 +34,13 @@ export function parseApiPermissions(value: unknown): ApiPermissions | undefined 
 }
 
 export function isApiPermissionAllowed(permissions: ApiPermissions | undefined, action: string): boolean {
+    const actionKey = normalizeApiPermissionKey(action);
+    const explicitOnly = EXPLICIT_PERMISSION_ACTIONS.has(actionKey);
+
     if (!permissions || Object.keys(permissions).length === 0) {
-        return true;
+        return !explicitOnly;
     }
 
-    const actionKey = normalizeApiPermissionKey(action);
     for (const wildcardKey of WILDCARD_KEYS) {
         if (permissions[wildcardKey] === true) {
             return true;

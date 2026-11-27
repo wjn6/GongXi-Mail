@@ -572,6 +572,20 @@ export const emailApi = {
 // 邮箱分组 API
 // ========================================
 
+type MailFetchStrategyValue = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY';
+export type SendStrategyValue = 'LEAST_USED' | 'ROUND_ROBIN' | 'RANDOM';
+
+interface GroupInput {
+    name?: string;
+    description?: string;
+    fetchStrategy?: MailFetchStrategyValue;
+    sendEnabled?: boolean;
+    sendStrategy?: SendStrategyValue;
+    sendDailyLimit?: number;
+    sendIntervalSeconds?: number;
+    sendMaxRecipients?: number;
+}
+
 export const groupApi = {
     getList: <T = Record<string, unknown>>() =>
         requestGet<T[]>('/admin/email-groups', { cacheMs: 5000 }),
@@ -579,15 +593,15 @@ export const groupApi = {
     getById: (id: number) =>
         requestGet<Record<string, unknown>>(`/admin/email-groups/${id}`),
 
-    create: (data: { name: string; description?: string; fetchStrategy: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }) =>
-        requestPost<Record<string, unknown>, { name: string; description?: string; fetchStrategy: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }>(
+    create: (data: GroupInput & { name: string; fetchStrategy: MailFetchStrategyValue }) =>
+        requestPost<Record<string, unknown>, GroupInput & { name: string; fetchStrategy: MailFetchStrategyValue }>(
             '/admin/email-groups',
             data,
             { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }
         ),
 
-    update: (id: number, data: { name?: string; description?: string; fetchStrategy?: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }) =>
-        requestPut<Record<string, unknown>, { name?: string; description?: string; fetchStrategy?: 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY' }>(
+    update: (id: number, data: GroupInput) =>
+        requestPut<Record<string, unknown>, GroupInput>(
             `/admin/email-groups/${id}`,
             data,
             { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }
@@ -607,6 +621,56 @@ export const groupApi = {
         requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/remove`, {
             emailIds,
         }, { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }),
+};
+
+// ========================================
+// 发信 API（发信权限检测 / 测试发信 / 发信记录）
+// ========================================
+
+export interface SendCheckResult {
+    id: number;
+    email: string;
+    capability: 'ALLOWED' | 'DENIED' | 'UNKNOWN';
+    message: string;
+}
+
+export const sendApi = {
+    checkSend: (id: number) =>
+        requestPost<SendCheckResult, Record<string, never>>(`/admin/emails/${id}/check-send`, {}, {
+            invalidatePrefixes: ['/admin/emails', '/admin/send-logs/stats'],
+        }),
+
+    checkSendBatch: (ids: number[]) =>
+        requestPost<{ total: number; allowed: number; denied: number; failed: number; results: SendCheckResult[] }, { ids: number[] }>(
+            '/admin/emails/check-send',
+            { ids },
+            { invalidatePrefixes: ['/admin/emails', '/admin/send-logs/stats'] }
+        ),
+
+    testSend: (id: number, data: { to: string; subject?: string; text?: string }) =>
+        requestPost<{ sent: boolean; logId: string; message: string; reason: string | null }, { to: string; subject?: string; text?: string }>(
+            `/admin/emails/${id}/test-send`,
+            data,
+            { invalidatePrefixes: ['/admin/emails', '/admin/send-logs'] }
+        ),
+
+    getLogs: <T = Record<string, unknown>>(params: {
+        page?: number;
+        pageSize?: number;
+        status?: string;
+        source?: string;
+        groupId?: number;
+        apiKeyId?: number;
+        emailAccountId?: number;
+        keyword?: string;
+    }) =>
+        requestGet<ApiPagedList<T>>('/admin/send-logs', { params, cacheMs: 1000 }),
+
+    getLog: <T = Record<string, unknown>>(id: string) =>
+        requestGet<T>(`/admin/send-logs/${id}`),
+
+    getStats: <T = Record<string, unknown>>() =>
+        requestGet<T>('/admin/send-logs/stats', { cacheMs: 2000 }),
 };
 
 // ========================================

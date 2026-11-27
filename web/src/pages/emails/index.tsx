@@ -23,6 +23,9 @@ import {
     Empty,
     Pagination,
     Segmented,
+    Switch,
+    InputNumber,
+    Divider,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -39,8 +42,10 @@ import {
     MoreOutlined,
     ReloadOutlined,
     CopyOutlined,
+    SendOutlined,
+    SafetyCertificateOutlined,
 } from '@ant-design/icons';
-import { emailApi, groupApi } from '../../api';
+import { emailApi, groupApi, sendApi, type SendStrategyValue } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
@@ -60,6 +65,50 @@ const MAIL_FETCH_STRATEGY_OPTIONS = [
 type MailFetchStrategy = (typeof MAIL_FETCH_STRATEGY_OPTIONS)[number]['value'];
 
 type EmailStatus = 'ACTIVE' | 'ERROR' | 'DISABLED';
+type SendCapability = 'UNKNOWN' | 'ALLOWED' | 'DENIED';
+
+const SEND_STRATEGY_OPTIONS: Array<{ value: SendStrategyValue; label: string }> = [
+    { value: 'LEAST_USED', label: '最少使用优先（24 小时内发得最少）' },
+    { value: 'ROUND_ROBIN', label: '轮流（最久没发信的优先）' },
+    { value: 'RANDOM', label: '随机' },
+];
+
+const SEND_STRATEGY_LABELS: Record<SendStrategyValue, string> = {
+    LEAST_USED: '最少使用',
+    ROUND_ROBIN: '轮流',
+    RANDOM: '随机',
+};
+
+const SEND_GROUP_DEFAULTS = {
+    sendEnabled: false,
+    sendStrategy: 'LEAST_USED' as SendStrategyValue,
+    sendDailyLimit: 30,
+    sendIntervalSeconds: 60,
+    sendMaxRecipients: 10,
+};
+
+const renderSendCapability = (record: Pick<EmailAccount, 'sendCapability' | 'sendCooldownUntil' | 'sendErrorMessage'>) => {
+    const coolingUntil = record.sendCooldownUntil && dayjs(record.sendCooldownUntil).isAfter(dayjs())
+        ? dayjs(record.sendCooldownUntil)
+        : null;
+    const meta: Record<SendCapability, { color: string; label: string }> = {
+        ALLOWED: { color: 'green', label: '可发信' },
+        DENIED: { color: 'red', label: '无发信权限' },
+        UNKNOWN: { color: 'default', label: '未检测' },
+    };
+    const capability = (record.sendCapability || 'UNKNOWN') as SendCapability;
+    const tag = <Tag color={meta[capability].color} style={{ marginInlineEnd: 0 }}>{meta[capability].label}</Tag>;
+    const tooltip = [
+        coolingUntil ? `冷却至 ${coolingUntil.format('MM-DD HH:mm')}` : null,
+        record.sendErrorMessage,
+    ].filter(Boolean).join('；');
+    return (
+        <Space size={4} wrap>
+            {tooltip ? <Tooltip title={tooltip}>{tag}</Tooltip> : tag}
+            {coolingUntil && <Tag color="orange" style={{ marginInlineEnd: 0 }}>冷却中</Tag>}
+        </Space>
+    );
+};
 
 const EMAIL_STATUS_META: Record<EmailStatus, { color: string; label: string }> = {
     ACTIVE: { color: 'green', label: '正常' },
@@ -86,6 +135,11 @@ interface EmailGroup {
     name: string;
     description: string | null;
     fetchStrategy: MailFetchStrategy;
+    sendEnabled: boolean;
+    sendStrategy: SendStrategyValue;
+    sendDailyLimit: number;
+    sendIntervalSeconds: number;
+    sendMaxRecipients: number;
     emailCount: number;
     createdAt: string;
     updatedAt: string;
@@ -101,6 +155,11 @@ interface EmailAccount {
     lastCheckAt: string | null;
     tokenRefreshedAt: string | null;
     errorMessage: string | null;
+    sendCapability?: SendCapability;
+    sendCheckedAt?: string | null;
+    lastSentAt?: string | null;
+    sendCooldownUntil?: string | null;
+    sendErrorMessage?: string | null;
     createdAt: string;
 }
 
@@ -177,6 +236,10 @@ const EmailsPage: React.FC = () => {
     const [assignTargetGroupId, setAssignTargetGroupId] = useState<number | undefined>(undefined);
     const [refreshingTokenIds, setRefreshingTokenIds] = useState<Set<number>>(new Set());
     const [batchRefreshing, setBatchRefreshing] = useState(false);
+    const [batchCheckingSend, setBatchCheckingSend] = useState(false);
+    const [testSendTarget, setTestSendTarget] = useState<EmailAccount | null>(null);
+    const [testSending, setTestSending] = useState(false);
+    const [testSendForm] = Form.useForm();
     const latestListRequestIdRef = useRef(0);
 
     const toOptionalNumber = (value: unknown): number | undefined => {
@@ -507,10 +570,81 @@ const EmailsPage: React.FC = () => {
     // ========================================
     // Group CRUD handlers
     // ========================================
+    // ========================================
+    // 发信权限检测 / 测试发信
+    // ========================================
+    const handleCheckSend = useCallback(async (record: EmailAccount) => {
+        const hide = message.loading(`正在检测 ${record.email} 的发信权限...`, 0);
+        try {
+            const res = await sendApi.checkSend(record.id);
+            const result = res.data;
+            if (result.capability === 'ALLOWED') {
+                message.success(`${record.email} 可以发信`);
+            } else if (result.capability === 'DENIED') {
+                message.warning(`${record.email} 的令牌没有 Mail.Send 权限`);
+            } else {
+                message.error(`检测失败：${result.message}`);
+            }
+            fetchData();
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '检测失败'));
+        } finally {
+            hide();
+        }
+    }, [fetchData]);
+
+    const handleBatchCheckSend = async () => {
+        if (selectedRowKeys.length === 0) {
+            message.warning('请先选择邮箱');
+            return;
+        }
+        setBatchCheckingSend(true);
+        try {
+            const res = await sendApi.checkSendBatch(selectedRowKeys as number[]);
+            const { allowed, denied, failed } = res.data;
+            message.success(`检测完成：可发信 ${allowed}，无权限 ${denied}，失败 ${failed}`);
+            fetchData();
+        } catch (err: unknown) {
+            message.error(getErrorMessage(err, '检测失败'));
+        } finally {
+            setBatchCheckingSend(false);
+        }
+    };
+
+    const openTestSend = useCallback((record: EmailAccount) => {
+        setTestSendTarget(record);
+        testSendForm.resetFields();
+    }, [testSendForm]);
+
+    const handleTestSend = async () => {
+        if (!testSendTarget) return;
+        try {
+            const values = await testSendForm.validateFields();
+            setTestSending(true);
+            const res = await sendApi.testSend(testSendTarget.id, {
+                to: values.to,
+                subject: values.subject || undefined,
+                text: values.text || undefined,
+            });
+            if (res.data.sent) {
+                message.success('Graph 已接收这封邮件（是否送达以收件方为准）');
+                setTestSendTarget(null);
+            } else {
+                message.error(`发送失败：${res.data.message}`);
+            }
+            fetchData();
+        } catch (err: unknown) {
+            if (err && typeof err === 'object' && 'errorFields' in err) return;
+            message.error(getErrorMessage(err, '发送失败'));
+        } finally {
+            setTestSending(false);
+        }
+    };
+
     const handleCreateGroup = () => {
         setEditingGroupId(null);
         groupForm.resetFields();
-        groupForm.setFieldsValue({ fetchStrategy: 'GRAPH_FIRST' });
+        groupForm.setFieldsValue({ fetchStrategy: 'GRAPH_FIRST', ...SEND_GROUP_DEFAULTS });
         setGroupModalVisible(true);
     };
 
@@ -520,6 +654,11 @@ const EmailsPage: React.FC = () => {
             name: group.name,
             description: group.description,
             fetchStrategy: group.fetchStrategy,
+            sendEnabled: group.sendEnabled ?? SEND_GROUP_DEFAULTS.sendEnabled,
+            sendStrategy: group.sendStrategy ?? SEND_GROUP_DEFAULTS.sendStrategy,
+            sendDailyLimit: group.sendDailyLimit ?? SEND_GROUP_DEFAULTS.sendDailyLimit,
+            sendIntervalSeconds: group.sendIntervalSeconds ?? SEND_GROUP_DEFAULTS.sendIntervalSeconds,
+            sendMaxRecipients: group.sendMaxRecipients ?? SEND_GROUP_DEFAULTS.sendMaxRecipients,
         });
         setGroupModalVisible(true);
     }, [groupForm]);
@@ -660,6 +799,13 @@ const EmailsPage: React.FC = () => {
             render: formatDateTime,
         },
         {
+            title: '发信',
+            dataIndex: 'sendCapability',
+            key: 'sendCapability',
+            width: 170,
+            render: (_: unknown, record: EmailAccount) => renderSendCapability(record),
+        },
+        {
             title: '创建时间',
             dataIndex: 'createdAt',
             key: 'createdAt',
@@ -669,10 +815,25 @@ const EmailsPage: React.FC = () => {
         {
             title: '操作',
             key: 'action',
-            width: 220,
+            width: 280,
             fixed: 'right',
             render: (_: unknown, record: EmailAccount) => (
                 <Space size={0}>
+                    <Tooltip title="检测发信权限">
+                        <Button
+                            type="text"
+                            icon={<SafetyCertificateOutlined />}
+                            onClick={() => handleCheckSend(record)}
+                        />
+                    </Tooltip>
+                    <Tooltip title="测试发信">
+                        <Button
+                            type="text"
+                            icon={<SendOutlined />}
+                            onClick={() => openTestSend(record)}
+                            disabled={record.sendCapability === 'DENIED'}
+                        />
+                    </Tooltip>
                     <Tooltip title="刷新 Token">
                         <Button
                             type="text"
@@ -713,7 +874,7 @@ const EmailsPage: React.FC = () => {
                 </Space>
             ),
         },
-    ], [handleDelete, handleEdit, handleRefreshToken, handleViewMails, refreshingTokenIds]);
+    ], [handleCheckSend, handleDelete, handleEdit, handleRefreshToken, handleViewMails, openTestSend, refreshingTokenIds]);
 
     const rowSelection = useMemo(
         () => ({
@@ -817,6 +978,10 @@ const EmailsPage: React.FC = () => {
     const handleMobileMoreAction = (record: EmailAccount, key: string) => {
         if (key === 'refresh') {
             void handleRefreshToken(record);
+        } else if (key === 'check-send') {
+            void handleCheckSend(record);
+        } else if (key === 'test-send') {
+            openTestSend(record);
         } else if (key === 'edit') {
             void handleEdit(record);
         } else if (key === 'delete') {
@@ -870,6 +1035,7 @@ const EmailsPage: React.FC = () => {
                                         </Text>
                                         <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                             {renderEmailStatusTag(record)}
+                                            {record.sendCapability && record.sendCapability !== 'UNKNOWN' && renderSendCapability(record)}
                                             {record.group ? (
                                                 <Tag color="blue" style={{ marginInlineEnd: 0 }}>{record.group.name}</Tag>
                                             ) : (
@@ -917,6 +1083,13 @@ const EmailsPage: React.FC = () => {
                                                     icon: <SyncOutlined spin={refreshing} />,
                                                     label: '刷新 Token',
                                                     disabled: refreshing || record.status === 'DISABLED',
+                                                },
+                                                { key: 'check-send', icon: <SafetyCertificateOutlined />, label: '检测发信权限' },
+                                                {
+                                                    key: 'test-send',
+                                                    icon: <SendOutlined />,
+                                                    label: '测试发信',
+                                                    disabled: record.sendCapability === 'DENIED',
                                                 },
                                                 { key: 'edit', icon: <EditOutlined />, label: '编辑' },
                                                 { type: 'divider' },
@@ -968,6 +1141,21 @@ const EmailsPage: React.FC = () => {
             key: 'fetchStrategy',
             width: 190,
             render: (value: MailFetchStrategy) => <Tag color="purple">{MAIL_FETCH_STRATEGY_LABELS[value]}</Tag>,
+        },
+        {
+            title: '发信',
+            dataIndex: 'sendEnabled',
+            key: 'sendEnabled',
+            width: 230,
+            render: (_: unknown, record: EmailGroup) => (record.sendEnabled ? (
+                <Tooltip title={`每账号 24 小时 ${record.sendDailyLimit} 封，间隔 ${record.sendIntervalSeconds} 秒，每封最多 ${record.sendMaxRecipients} 个收件人`}>
+                    <Space size={4} wrap>
+                        <Tag color="green" style={{ marginInlineEnd: 0 }}>已开启</Tag>
+                        <Tag style={{ marginInlineEnd: 0 }}>{SEND_STRATEGY_LABELS[record.sendStrategy] ?? record.sendStrategy}</Tag>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{record.sendDailyLimit} 封/天</Text>
+                    </Space>
+                </Tooltip>
+            ) : <Tag style={{ marginInlineEnd: 0 }}>关闭</Tag>),
         },
         {
             title: '邮箱数',
@@ -1080,6 +1268,14 @@ const EmailsPage: React.FC = () => {
                                                 </Button>
                                                 <Button onClick={handleBatchRemoveGroup}>
                                                     移出分组 ({selectedRowKeys.length})
+                                                </Button>
+                                                <Button
+                                                    icon={<SafetyCertificateOutlined />}
+                                                    loading={batchCheckingSend}
+                                                    onClick={handleBatchCheckSend}
+                                                    disabled={selectedRowKeys.length > 200}
+                                                >
+                                                    检测发信权限 ({selectedRowKeys.length})
                                                 </Button>
                                                 <Popconfirm
                                                     title={`确定要删除选中的 ${selectedRowKeys.length} 个邮箱吗？`}
@@ -1432,6 +1628,70 @@ const EmailsPage: React.FC = () => {
                     >
                         <Select options={MAIL_FETCH_STRATEGY_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} />
                     </Form.Item>
+
+                    <Divider titlePlacement="start" style={{ margin: '8px 0 16px' }}>发信设置</Divider>
+                    <Form.Item
+                        name="sendEnabled"
+                        label="参与发信池"
+                        valuePropName="checked"
+                        extra="开启后，组内能发信的账号会被 Resend 兼容接口轮换使用"
+                    >
+                        <Switch />
+                    </Form.Item>
+                    <Form.Item noStyle shouldUpdate={(prev, next) => prev.sendEnabled !== next.sendEnabled}>
+                        {({ getFieldValue }) => getFieldValue('sendEnabled') ? (
+                            <>
+                                <Form.Item name="sendStrategy" label="挑选账号方式" rules={[{ required: true }]}>
+                                    <Select options={SEND_STRATEGY_OPTIONS} />
+                                </Form.Item>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', columnGap: 12 }}>
+                                    <Form.Item name="sendDailyLimit" label="每账号 24 小时上限" rules={[{ required: true }]}>
+                                        <InputNumber min={1} max={10000} precision={0} style={{ width: '100%' }} addonAfter="封" />
+                                    </Form.Item>
+                                    <Form.Item name="sendIntervalSeconds" label="同账号发信间隔" rules={[{ required: true }]}>
+                                        <InputNumber min={0} max={86400} precision={0} style={{ width: '100%' }} addonAfter="秒" />
+                                    </Form.Item>
+                                    <Form.Item name="sendMaxRecipients" label="每封收件人上限" rules={[{ required: true }]}>
+                                        <InputNumber min={1} max={150} precision={0} style={{ width: '100%' }} addonAfter="个" />
+                                    </Form.Item>
+                                </div>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                    个人 Outlook 账号的发信量受微软限制，新账号尤其严格，建议从较低的上限开始。
+                                </Text>
+                            </>
+                        ) : null}
+                    </Form.Item>
+                </Form>
+            </Modal>
+
+            {/* 测试发信 Modal */}
+            <Modal
+                title={testSendTarget ? `测试发信 - ${testSendTarget.email}` : '测试发信'}
+                open={!!testSendTarget}
+                onOk={handleTestSend}
+                onCancel={() => setTestSendTarget(null)}
+                okText="发送"
+                confirmLoading={testSending}
+                destroyOnHidden
+                width={480}
+            >
+                <Form form={testSendForm} layout="vertical">
+                    <Form.Item
+                        name="to"
+                        label="收件人"
+                        rules={[{ required: true, message: '请输入收件人' }, { type: 'email', message: '请输入有效的邮箱地址' }]}
+                    >
+                        <Input placeholder="you@example.com" inputMode="email" />
+                    </Form.Item>
+                    <Form.Item name="subject" label="主题">
+                        <Input placeholder="默认：GongXi Mail 测试发信" maxLength={200} />
+                    </Form.Item>
+                    <Form.Item name="text" label="正文">
+                        <TextArea rows={4} placeholder="默认：一段说明发件账号的测试文本" maxLength={5000} />
+                    </Form.Item>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                        测试发信不受分组开关、间隔和额度限制，但会计入该账号的 24 小时发信量，并出现在发信记录中。
+                    </Text>
                 </Form>
             </Modal>
 
